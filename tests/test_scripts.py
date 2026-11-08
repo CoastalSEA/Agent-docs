@@ -194,6 +194,39 @@ class RunControlTracked(Project):
         self.assertNotIn("..", Path(r.stdout.strip()).name)
 
 
+class RunControlRefusals(Project):
+    """Cases where the script must stop with a message, change nothing and exit 1."""
+
+    def assert_refused(self, r, text):
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(text, r.stderr)
+
+    def test_start_refuses_a_task_name_with_no_usable_characters(self):
+        self.assert_refused(self.rc("start", "!!!"), "no usable characters")
+        self.assertEqual([p.name for p in (self.root / "outputs").iterdir()], ["INDEX.md"])
+
+    def test_start_and_path_refuse_a_git_ignored_task_folder(self):
+        (self.root / ".gitignore").write_text("outputs/demo/\n", encoding="utf-8")
+        for command in ("start", "path"):
+            self.assert_refused(self.rc(command, "demo"), "git-ignored although outputs/ is not")
+        self.assertFalse((self.root / "outputs" / "demo").exists())
+
+    def test_accept_refuses_when_no_run_is_pending(self):
+        self.assert_refused(self.rc("accept", "demo", "Q?"), "no run pending review")
+        self.assertEqual(self.tags(), [])
+
+    def test_accept_without_a_question_refuses_when_there_is_no_earlier_run(self):
+        self.start_and_write()
+        self.assert_refused(self.rc("accept", "demo"), "give the question")
+        self.assertEqual(self.tags(), [])
+
+    def test_a_refused_accept_leaves_the_pending_run_in_place(self):
+        self.start_and_write()
+        self.rc("accept", "demo")
+        self.assertTrue((self.root / "outputs" / "demo" / "r.txt").exists())
+        self.assertEqual(self.index_rows(), [])
+
+
 class RunControlFolderMode(Project):
     tracked = False
 

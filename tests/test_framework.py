@@ -109,6 +109,24 @@ class SharedFiles(unittest.TestCase):
             self.assertIn(name, text)
 
 
+class Readme(unittest.TestCase):
+    def listed_in_structure(self):
+        text = read(REPO / "README.md")
+        nl, fence = chr(10), chr(96) * 3
+        head = text.index("## Structure")
+        start = text.index(nl, text.index(fence, head)) + 1
+        end = text.index(fence, start)
+        return {ln.split()[0].rstrip("/") for ln in text[start:end].split(nl) if ln.strip()}
+
+    def test_structure_list_matches_the_top_level_folders(self):
+        tracked = {rel(p).split("/")[0] for p in tracked_files() if "/" in rel(p)}
+        folders = {n for n in tracked if not n.startswith(".")}
+        listed = self.listed_in_structure()
+        self.assertEqual(sorted(folders - listed), [], "folders missing from the README Structure list")
+        missing = [n for n in listed if not (REPO / n).exists()]
+        self.assertEqual(missing, [], "README Structure lists names that do not exist")
+
+
 class Skills(unittest.TestCase):
     def test_every_skill_frontmatter_parses(self):
         skills = sorted((REPO / "skills").glob("*/SKILL.md"))

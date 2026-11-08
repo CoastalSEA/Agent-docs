@@ -18,9 +18,11 @@ agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook
 mcp/        one subfolder per MCP server: its code, spec, generator prompt, and reports
-prompts/    general-purpose prompt/workflow templates not tied to one specific tool
+prompts/    prompt and workflow templates not tied to one tool
+records/    the decision log (the handoff file is local and ignored)
 skills/     one subfolder per skill, each holding a SKILL.md
 statusline/ statusline scripts for Claude Code's terminal status bar
+tests/      tests for the scripts and the shared files
 ```
 
 ## Conventions

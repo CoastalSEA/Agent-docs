@@ -16,7 +16,7 @@ not from anything local to the project itself.
 ## Finding this project's sessions
 
 The project root is the cwd this skill was invoked from. Do not ask for it or
-guess it.
+guess it. Note it before running any other command, because the shell may move later.
 
 Each session's logs live in a subfolder of `~/.claude/projects` named after
 the cwd it ran from, with `:` and path separators replaced by `-`. This
@@ -72,9 +72,22 @@ rather than silently omitting them.
 
 ## Deliverables
 
-Produce all three in a single file, `AI-DISCLOSURE.md`, written to the
-project root. Overwrite it on each run rather than creating dated copies,
-so it stays current as the project continues.
+The output folder comes from the shared run script (global Outputs rules),
+run for `<project-root>`. The task name is `project-disclosure-<project>`,
+where `<project>` is the name of the project root folder; report it plainly.
+
+- Before reading any log, run the run control command in `machine.md`, as
+  `path project-disclosure-<project> --root "<project-root>"`. It changes
+  nothing. If it exits with an error, stop and report the message; do not
+  work round it. If the script is missing, stop and say so.
+- When the disclosure is ready, run the same command with `start` in place
+  of `path`, and write into the folder it prints.
+- Report the run as pending review, with the tag from `run_info.txt`. The
+  appendix holds prompt text, so the user decides whether to accept, reject
+  or discard it. Do not accept it yourself.
+
+Produce all three in a single file, `AI-DISCLOSURE.md`, in that folder. The
+name is fixed.
 
 1. **One sentence**, suitable for a presentation slide.
 2. **One short paragraph**, suitable for a methods section in a report or paper.

@@ -29,3 +29,6 @@ working_docs/
 
 # User-specific lint patterns (see tests/test_framework.py)
 tests/personal_patterns.local.txt
+
+# A project disclosure holds prompts and session details: keep it out of the repository
+AI-DISCLOSURE.md
