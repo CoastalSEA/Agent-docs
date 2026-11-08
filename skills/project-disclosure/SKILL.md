@@ -87,15 +87,23 @@ where `<project>` is the name of the project root folder; report it plainly.
   or discard it. Do not accept it yourself.
 
 Produce all three in a single file, `AI-DISCLOSURE.md`, in that folder. The
-name is fixed.
+name is fixed, and it is the only file you write there. Write any helper
+script to a temporary folder outside the output folder.
 
 1. **One sentence**, suitable for a presentation slide.
 2. **One short paragraph**, suitable for a methods section in a report or paper.
+   State only recorded facts: the number of sessions, dates, model, access
+   method, permission mode, and the kinds of tools used. Make no statement
+   about what was not done or not touched: the logs do not show absences.
 3. **A reporting checklist**, one row per session, with columns: date,
    model, access method, task/purpose (summarized from that session's
    prompts), permission mode, files touched, commands run, and a pointer
    to that session's entry in the prompt appendix (don't inline full
    prompt text into the table — it doesn't fit a row).
+
+   List a Write or Edit under files touched only if the log pairs it with a
+   result that is not an error. Mark a refused or failed call as attempted,
+   and write `MISSING` where no result is logged.
 
    Follow the table with an **appendix** listing, per session, the
    chronological prompt text (redacted per above).
