@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Windows folder customization (per-machine, not repo content)
+desktop.ini
+Thumbs.db
+
+# Editor/OS cruft
+.DS_Store
+
+# Local secrets / machine-specific config
+.env
+*.local.json
+
+# Task outputs and working documents (local artifacts, not repo content)
+outputs/
+!claude-md/project-template/outputs/
+working_docs/
+
+# This repo's own handoff, rewritten at every wrap up (local state, not repo content).
+# Anchored to the repo root so the handoff stubs under claude-md/ stay tracked.
+/records/HANDOFF.md
+
+# Editor settings (kept in the private companion repository)
+.vscode/
+
+# User-specific lint patterns (see tests/test_framework.py)
+tests/personal_patterns.local.txt

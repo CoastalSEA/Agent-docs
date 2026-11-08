@@ -1,0 +1,13 @@
+# Downloaded sources (inputs); downloaded references go in sources/references/ as <FirstAuthor><Year>_<short title>.pdf
+sources/
+
+# Office lock files
+~$*
+
+# Python
+__pycache__/
+*.pyc
+
+# Large generated files (products): only the register is tracked
+products/*
+!products/PRODUCTS.md

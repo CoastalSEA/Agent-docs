@@ -1,0 +1,11 @@
+# Text files are stored and checked out with LF endings on every machine.
+# This overrides core.autocrlf, which is set to true in Git for Windows.
+* text=auto eol=lf
+
+# Binary files are never converted.
+*.docx binary
+*.dotx binary
+*.xltx binary
+*.potx binary
+*.thmx binary
+*.png binary
