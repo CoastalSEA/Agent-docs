@@ -11,6 +11,7 @@ This repo maintains version-controlled copies of CLAUDE.md files, prompt templat
 - Outputs and working files: `outputs/` and `working_docs/` (git-ignored, not repo content). Outputs here are test runs, so the global rule for git-ignored outputs applies: one `<task>-<DDMMYY>-run<N>` folder per run
 - Shared run script: `scripts/run_control.py` (installed by `deploy.py` to `~/.claude/scripts/`; skills call it)
 - Session records: `records/` (handoff, decisions)
+- Private companion repository (optional): templates, settings, working documents and the private decision log; its location is under Locations in `machine.md`
 - Start every session from project root—Claude memory is keyed to the launch folder
 
 ## Environment, Code standards, Analysis rules, Methodological guardrails, Hard boundaries, Outputs, What done means
