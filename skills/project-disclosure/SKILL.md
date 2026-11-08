@@ -36,6 +36,13 @@ by itself to decide what is "inside" the project. Instead:
 3. A project folder can hold multiple `.jsonl` files — one per session.
    Filenames are random UUIDs, not date-ordered, so sort all matching
    sessions chronologically by their logged timestamps, not by filename.
+4. Subagent transcripts are not in the session file. A session id may have
+   a folder `<session id>/subagents/` holding `agent-<id>.jsonl` (the
+   transcript) and `agent-<id>.meta.json` (agent type and description). Read
+   each `.jsonl` with its parent session and count its tools, files and
+   commands under that session, marked as subagent calls. A subagent log has
+   no permission mode: write `MISSING`. A `.meta.json` with no `.jsonl` is
+   also `MISSING`.
 
 Report, in the output, which directories were actually found to have
 sessions (root plus any subfolders) so the scope is visible rather than
