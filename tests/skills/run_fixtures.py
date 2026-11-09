@@ -13,22 +13,29 @@ folder names made from the temporary project path, and removes them afterwards.
 
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
-  skill      project-disclosure, analysis-adversary (default: both)
+                                           [--estuary-doc PATH] [--test-library PATH]
+  skill      project-disclosure, analysis-adversary, proofread, citation-check (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
-  --timeout  seconds allowed for each session (default 900)
+  --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
+  --estuary-doc PATH   the source .doc for the proofread fixture (default working_docs/Estuary Notes.doc);
+             the fixture needs Microsoft Word and is skipped without it
+  --test-library PATH  the .enl file of the test EndNote library for the citation-check fixture (or set
+             FIXTURE_ENDNOTE_LIBRARY); the fixture is skipped without it
   --claude   the claude command (default: the one on PATH)
   --permission-mode  the mode for the sessions (default auto, as in interactive use; a headless session
              started in the default mode cannot get approval for run control or Python commands)
   --out      folder for the results (default: working_docs/skill-runs under the repository)
 Inputs:  the live Claude configuration; `claude` on PATH.
 Outputs: <out>/<skill>-<DDMMYY-HHMM>/ with reply.txt, the saved deliverable and checks.json; a table on standard output.
-Exit:    0 if every check of every fixture passed; 1 otherwise.
+Exit:    0 if every check of every fixture that ran passed (a skipped fixture is not a failure); 1 otherwise.
 Version: see VERSION; `--version` prints it.
 """
 import argparse
 import hashlib
+import html
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -36,10 +43,11 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 REPO = Path(__file__).resolve().parents[2]
 CLAUDE_HOME = Path.home() / ".claude"
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -81,8 +89,14 @@ def jsonl(path, entries):
 class Fixture:
     name = ""
     checks_listed = ()
+    timeout = 900
+    max_turns = 30
 
-    def build(self, tmp):
+    def extra_args(self, root):
+        """Extra arguments for the claude command."""
+        return []
+
+    def build(self, tmp, args=None):
         """Create the project under tmp; return its root."""
         raise NotImplementedError
 
@@ -122,7 +136,7 @@ class ProjectDisclosure(Fixture):
         "the project files are unchanged",
     )
 
-    def build(self, tmp):
+    def build(self, tmp, args=None):
         self.base = Path(tmp)
         root = self.base / "Alpha"
         (root / "analysis").mkdir(parents=True)
@@ -265,7 +279,7 @@ slope = sum((a - mt) * (b - my) for a, b in zip(t, y)) / sum((a - mt) ** 2 for a
 print(f"k = {-slope:.3f} per day")
 '''
 
-    def build(self, tmp):
+    def build(self, tmp, args=None):
         import math
         import random
         root = (Path(tmp) / "Decay").resolve()
@@ -313,7 +327,314 @@ print(f"k = {-slope:.3f} per day")
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary())}
+class Skip(Exception):
+    """Raised by a fixture whose source material or tools are not available here."""
+
+
+def doc_paragraphs(xml):
+    return re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
+
+
+def paragraph_text(p, mode):
+    """Text of one paragraph as plain text, with tracked changes accepted ('accept') or rejected ('reject')."""
+    if mode == "accept":
+        p = re.sub(r"<w:del\b[^>]*[^/]>.*?</w:del>", "", p, flags=re.S)
+    elif mode == "reject":
+        p = re.sub(r"<w:ins\b[^>]*[^/]>.*?</w:ins>", "", p, flags=re.S)
+    return html.unescape("".join(re.findall(r"<w:(?:t|delText)[^>]*>([^<]*)</w:(?:t|delText)>", p)))
+
+
+def doc_text(path, mode="accept"):
+    """[paragraph text] of a .docx with tracked changes accepted or rejected."""
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+    return [re.sub(r"\s+", " ", paragraph_text(p, mode)).strip() for p in doc_paragraphs(xml)]
+
+
+def word_available():
+    r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "try { $w = New-Object -ComObject Word.Application; $w.Quit(); 'yes' } catch { 'no' }"],
+                       capture_output=True, text=True, timeout=120)
+    return "yes" in (r.stdout or "")
+
+
+def word_run(script, timeout=180):
+    """Run a PowerShell script that drives Word; return (exit code, output)."""
+    with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as f:
+        f.write(script)
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", f.name],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+    finally:
+        Path(f.name).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------------------------------------
+class Proofread(Fixture):
+    name = "proofread"
+    timeout = 1800
+    # (text in the converted paragraph, text with the planted fault); each lies inside one run
+    PLANTS = [
+        ("relatively stable", "relativly stable"),
+        ("supply of sediment.", "supply of sedement."),
+        ("interplay of processes which", "interplay of proceses which"),
+        ("drowned valley harbours", "drowned valley harbors"),
+        ("past and future, is affected", "past and future, are affected"),
+        ("estuaries have had similar", "estuaries has had similar"),
+    ]
+    MUST_NOT_REMAIN = ["relativly", "sedement", "proceses", "harbors", "are affected", "estuaries has"]
+    MUST_REMAIN = ["relatively stable", "supply of sediment", "interplay of processes", "valley harbours"]
+    checks_listed = (
+        "the proofread copy is saved beside the original as '<name> - proofread.docx'",
+        "the original is unchanged",
+        "every change is tracked: rejecting all changes restores the planted text exactly",
+        "each of the six planted faults is corrected in the accepted text",
+        "every revision is authored by Claude",
+        "no change is made outside the first paragraph",
+        "comments: at most 5, each at most 50 words",
+        "the reply says that citation accuracy is not checked (citation-check)",
+        "Word opens the proofread copy without error and reports revisions",
+    )
+
+    def build(self, tmp, args=None):
+        source = Path(getattr(args, "estuary_doc", None) or REPO / "working_docs" / "Estuary Notes.doc")
+        if not source.is_file():
+            raise Skip(f"source document not found: {source} (give --estuary-doc)")
+        if sys.platform != "win32" or not word_available():
+            raise Skip("Microsoft Word is not available (needed to convert the .doc and for the skill)")
+        root = (Path(tmp) / "Notes").resolve()
+        root.mkdir()
+        converted = root / "converted.docx"
+        code, out = word_run(
+            "$w = New-Object -ComObject Word.Application; $w.Visible = $false; $w.DisplayAlerts = 0\n"
+            f"try {{ $d = $w.Documents.Open('{source}', $false, $true); $d.SaveAs2('{converted}', 16); $d.Close($false) }}\n"
+            "finally { $w.Quit() }\n")
+        if code != 0 or not converted.is_file():
+            raise Skip(f"conversion with Word failed: {out[:200]}")
+        target = root / "Estuary Notes.docx"
+        with zipfile.ZipFile(converted) as zin, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "word/document.xml":
+                    xml = data.decode("utf-8")
+                    for old, new in self.PLANTS:
+                        if xml.count(old) != 1:
+                            raise Skip(f"planted text not found exactly once in the converted document: {old!r}")
+                        xml = xml.replace(old, new)
+                    data = xml.encode("utf-8")
+                zout.writestr(item, data)
+        converted.unlink()
+        self.root = root
+        self.target = target
+        self.planted = doc_text(target)
+        self.before = tree_hashes(root)
+        return root
+
+    def prompt(self, root):
+        return ("Use the proofread skill on 'Estuary Notes.docx' in this folder. Scope: the first paragraph only, the prose "
+                "paragraph that begins 'Macrotidal estuaries'; leave the rest of the document alone. Do not ask me "
+                "questions. When the skill has finished, give me the path of the proofread copy and the summary.")
+
+    def check(self, root, reply, before):
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        copies = [p for p in root.rglob("*proofread*.docx")]
+        copy = next((p for p in copies if p.parent == root and p.name == "Estuary Notes - proofread.docx"), None)
+        add(self.checks_listed[0], copy is not None, f"found: {[p.name for p in copies]}")
+        add(self.checks_listed[1], tree_hashes(root).get("Estuary Notes.docx") == before.get("Estuary Notes.docx"))
+        if copy is None:
+            for c in self.checks_listed[2:6]:
+                add(c, False, "no copy")
+        else:
+            rejected, accepted = doc_text(copy, "reject"), doc_text(copy, "accept")
+            add(self.checks_listed[2], rejected == self.planted, "paragraphs differing: "
+                f"{[i for i, (a, b) in enumerate(zip(rejected, self.planted)) if a != b][:5]}")
+            first = accepted[0] if accepted else ""
+            bad = [w for w in self.MUST_NOT_REMAIN if w in first]
+            missing = [w for w in self.MUST_REMAIN if w not in first]
+            add(self.checks_listed[3], not bad and not missing, f"still present: {bad}; missing: {missing}")
+            with zipfile.ZipFile(copy) as z:
+                xml = z.read("word/document.xml").decode("utf-8")
+                comments = z.read("word/comments.xml").decode("utf-8") if "word/comments.xml" in z.namelist() else ""
+            authors = set(re.findall(r"<w:(?:ins|del)\b[^>]*w:author=\"([^\"]*)\"", xml))
+            add(self.checks_listed[4], authors == {"Claude"}, f"authors: {sorted(authors)}")
+            add(self.checks_listed[5], accepted[1:] == self.planted[1:] and rejected[1:] == self.planted[1:])
+            bodies = [re.sub(r"\s+", " ", paragraph_text(c, "accept")).strip()
+                      for c in re.findall(r"<w:comment\b.*?</w:comment>", comments, re.S)]
+            add(self.checks_listed[6], len(bodies) <= 5 and all(len(b.split()) <= 50 for b in bodies),
+                f"{len(bodies)} comments; words: {[len(b.split()) for b in bodies]}")
+        rl = reply.lower()
+        add(self.checks_listed[7], "citation-check" in rl or "citation check" in rl)
+        if copy is None:
+            add(self.checks_listed[8], False, "no copy")
+        else:
+            code, text = word_run(
+                "$w = New-Object -ComObject Word.Application; $w.Visible = $false; $w.DisplayAlerts = 0\n"
+                f"try {{ $d = $w.Documents.Open('{copy}', $false, $true); 'revisions=' + $d.Revisions.Count; "
+                "'comments=' + $d.Comments.Count; $d.Close($false) }\nfinally { $w.Quit() }\n")
+            m = re.search(r"revisions=(\d+)", text)
+            add(self.checks_listed[8], code == 0 and m is not None and int(m.group(1)) >= 1, text[:160])
+        return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+class CitationCheck(Fixture):
+    name = "citation-check"
+    timeout = 1800
+    # (library id, rec-number written in the field, year written in the field or None for the library's year)
+    CITES = [(1, 1, None), (2, 52, None), (3, 3, "2024")]
+    INVENTED = ("Harrington and Osei", "2021", "Adaptive Planning Horizons for Estuarine Flood Defences", 99)
+    checks_listed = (
+        "a report citation-check-report.md is saved in an output folder of the task",
+        "the invented reference is reported as unresolved",
+        "the year in the field (2024) against the library (2025) is reported for WorldPop",
+        "the stale rec-number 52 against the library record is reported for IPCC",
+        "the correct reference (World Economic Forum) is not reported as a problem",
+        "no external call was made",
+        "the report says external verification was not done",
+        "the manuscript, the library and the project files are unchanged",
+    )
+
+    def build(self, tmp, args=None):
+        lib = getattr(args, "test_library", None) or os.environ.get("FIXTURE_ENDNOTE_LIBRARY")
+        if not lib or not Path(lib).is_file():
+            raise Skip("no test EndNote library (give --test-library or set FIXTURE_ENDNOTE_LIBRARY)")
+        lib = Path(lib).resolve()
+        server = REPO / "mcp" / "endnote" / "endnote_server.py"
+        sdb = lib.with_name(lib.stem + ".Data") / "sdb" / "sdb.eni"
+        if not server.is_file() or not sdb.is_file():
+            raise Skip("the EndNote server or the library database is missing")
+        import sqlite3
+        con = sqlite3.connect("file:" + sdb.as_posix() + "?mode=ro", uri=True)
+        records = {}
+        for i, _, _ in self.CITES:
+            row = con.execute("select author, year, title, number, reference_type from refs where id = ?", (i,)).fetchone()
+            if not row or not row[2]:
+                raise Skip(f"library record {i} not found or has no title")
+            # the snapshot in the field repeats the library record exactly, so only the planted faults differ
+            records[i] = (row[0], row[1], row[2], row[3] or "", row[4])
+        con.close()
+        self.library = lib
+        self.records = records
+        root = (Path(tmp) / "Paper").resolve()
+        root.mkdir()
+        self.manuscript = root / "manuscript.docx"
+        self._write_docx(self.manuscript)
+        self.mcp_config = Path(tmp) / "mcp.json"
+        self.mcp_config.write_text(json.dumps({"mcpServers": {"endnote": {
+            "command": sys.executable, "args": [str(server)], "env": {"ENDNOTE_LIBRARY_PATH": str(lib)}}}}), encoding="utf-8")
+        self.root = root
+        self.before = tree_hashes(root)
+        self.lib_before = self._library_hashes()
+        return root
+
+    def _library_hashes(self):
+        data = self.library.with_name(self.library.stem + ".Data")
+        found = {self.library.name: hashlib.sha1(self.library.read_bytes()).hexdigest()}
+        for f in sorted(data.rglob("*")):
+            if f.is_file():
+                found[f.relative_to(data).as_posix()] = hashlib.sha1(f.read_bytes()).hexdigest()
+        return found
+
+    def extra_args(self, root):
+        return ["--mcp-config", str(self.mcp_config), "--strict-mcp-config"]
+
+    @staticmethod
+    def _field(author, year, title, recnum, display, number="", reftype=12):
+        esc = lambda s: s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        cite = (f"<EndNote><Cite><Author>{esc(author)}</Author><Year>{year}</Year><RecNum>{recnum}</RecNum>"
+                f"<DisplayText>{esc(display)}</DisplayText><record><rec-number>{recnum}</rec-number>"
+                f"<foreign-keys><key app=\"EN\" db-id=\"fixture\">{recnum}</key></foreign-keys>"
+                f"<ref-type name=\"Web Page\">{reftype}</ref-type><contributors><authors><author>{esc(author)}</author>"
+                f"</authors></contributors><titles><title>{esc(title)}</title></titles>"
+                + (f"<number>{esc(number)}</number>" if number else "") +
+                f"<dates><year>{year}</year></dates></record></Cite></EndNote>")
+        instr = " ADDIN EN.CITE " + esc(cite)
+        half = len(instr) // 2
+        return ('<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                f'<w:r><w:instrText xml:space="preserve">{instr[:half]}</w:instrText></w:r>'
+                f'<w:r><w:instrText xml:space="preserve">{instr[half:]}</w:instrText></w:r>'
+                '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+                f'<w:r><w:t>{esc(display)}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>')
+
+    def _write_docx(self, path):
+        sentences = []
+        for (i, recnum, year), lead in zip(self.CITES, ["Public attention to global risks has grown ",
+                                                        "Climate assessments are synthesised in a single report ",
+                                                        "Open demographic data are widely used "]):
+            author, lib_year, title, number, reftype = self.records[i]
+            shown = year or lib_year
+            name = author.strip().rstrip(",")
+            sentences.append(f'<w:r><w:t xml:space="preserve">{lead}</w:t></w:r>'
+                             + self._field(author, shown, title, recnum, f"({name}, {shown})", number, reftype)
+                             + '<w:r><w:t xml:space="preserve">. </w:t></w:r>')
+        author, year, title, recnum = self.INVENTED
+        sentences.append('<w:r><w:t xml:space="preserve">Flood defences need adaptive planning </w:t></w:r>'
+                         + self._field(author, year, title, recnum, f"({author}, {year})")
+                         + '<w:r><w:t xml:space="preserve">.</w:t></w:r>')
+        body = "<w:p>" + "".join(sentences) + "</w:p>"
+        document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+                    + body + "</w:body></w:document>")
+        types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/'
+                 'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-'
+                 'package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override '
+                 'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+                 'wordprocessingml.document.main+xml"/></Types>')
+        rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.'
+                'org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", types)
+            z.writestr("_rels/.rels", rels)
+            z.writestr("word/document.xml", document)
+
+    def prompt(self, root):
+        return ("Use the citation-check skill on 'manuscript.docx' in this folder. Scope: the whole document. Run stage 1 "
+                "only. Do not ask me questions: where the skill asks for confirmation before external verification, the "
+                "answer is no, so make no external call of any kind (no CrossRef, Semantic Scholar, OpenAlex, arXiv or "
+                "web request) and report the external checks as not done. When the skill has finished, tell me the path "
+                "of the report and whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        import glob
+        text = self.result_text(root, "citation-check-report.md")
+        t = text or ""
+        lines = t.splitlines()
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        def lines_with(*needles, any_of=()):
+            return [ln for ln in lines if all(n.lower() in ln.lower() for n in needles)
+                    and (not any_of or any(a.lower() in ln.lower() for a in any_of))]
+
+        add(self.checks_listed[0], text is not None)
+        add(self.checks_listed[1], lines_with("Adaptive Planning", any_of=("unresolved", "not found", "no match", "no reasonable"))
+            or lines_with("Harrington", any_of=("unresolved", "not found", "no match", "no reasonable")))
+        add(self.checks_listed[2], lines_with("WorldPop", "2024", "2025"))
+        add(self.checks_listed[3], lines_with("IPCC", "52") or lines_with("AR6", "52"))
+        bad = lines_with("World Economic Forum", any_of=("mismatch", "unresolved", "ambiguous", "drift"))
+        add(self.checks_listed[4], not bad, f"lines: {bad[:2]}")
+        external = []
+        pattern = re.compile(r"crossref\.org|openalex\.org|semanticscholar|arxiv\.org|\"name\":\s*\"(WebFetch|WebSearch)\"", re.I)
+        for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if '"tool_use"' in line and pattern.search(line):
+                        external.append(line[:120])
+        add(self.checks_listed[5], not external, f"{len(external)} tool calls to external services")
+        add(self.checks_listed[6], re.search(r"not (verified|checked|done|run)|declined|no external", t, re.I) is not None)
+        add(self.checks_listed[7], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
+        return out
+
+
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), CitationCheck())}
 
 
 def purge(fixture, root, claude):
@@ -323,15 +644,21 @@ def purge(fixture, root, claude):
 
 def run_one(fixture, args, out_dir):
     tmp = Path(tempfile.mkdtemp(prefix="fx-"))
-    root = fixture.build(tmp)
+    try:
+        root = fixture.build(tmp, args)
+    except Skip as why:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return None, 0, str(why)
     stamp = datetime.now().strftime("%d%m%y-%H%M")
     dest = out_dir / f"{fixture.name}-{stamp}"
     dest.mkdir(parents=True, exist_ok=True)
     print(f"[{fixture.name}] project {root}", flush=True)
     started = time.time()
     try:
-        r = subprocess.run([args.claude, "-p", "--max-turns", "30", "--permission-mode", args.permission_mode], input=fixture.prompt(root), cwd=root,
-                           capture_output=True, text=True, timeout=args.timeout)
+        command = [args.claude, "-p", "--max-turns", str(fixture.max_turns), "--permission-mode", args.permission_mode,
+                   *fixture.extra_args(root)]
+        r = subprocess.run(command, input=fixture.prompt(root), cwd=root, capture_output=True, text=True,
+                           timeout=args.timeout or fixture.timeout)
         reply = (r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr.strip() else "")
     except subprocess.TimeoutExpired:
         reply = "[timed out]"
@@ -354,7 +681,9 @@ def main(argv):
     ap.add_argument("skills", nargs="*")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--keep", action="store_true")
-    ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--timeout", type=int, default=None)
+    ap.add_argument("--estuary-doc", default=None)
+    ap.add_argument("--test-library", default=None)
     ap.add_argument("--claude", default=shutil.which("claude") or "claude")
     ap.add_argument("--permission-mode", default="auto")
     ap.add_argument("--out", default=str(REPO / "working_docs" / "skill-runs"))
@@ -373,6 +702,9 @@ def main(argv):
     failed = False
     for n in names:
         results, seconds, dest = run_one(FIXTURES[n], a, Path(a.out))
+        if results is None:
+            print(f"[{n}] SKIPPED: {dest}")
+            continue
         print(f"[{n}] {seconds} s; results in {dest}")
         for name, ok, detail in results:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail and not ok else ""))

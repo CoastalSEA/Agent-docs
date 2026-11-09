@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -185,6 +186,246 @@ class AnalysisAdversaryFixture(Base):
         entry["message"]["content"][0]["input"]["command"] = "cat code/fit_decay.py"
         (logs / "s.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
         self.assertTrue(self.results()[self.fx.checks_listed[4]])
+
+
+def make_docx(path, paragraphs_xml):
+    """A minimal .docx whose body holds the given paragraph XML strings."""
+    import zipfile
+    body = "".join(paragraphs_xml)
+    doc = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/'
+           'wordprocessingml/2006/main"><w:body>' + body + "</w:body></w:document>")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("word/document.xml", doc)
+    return path
+
+
+def para(*runs):
+    return "<w:p>" + "".join(runs) + "</w:p>"
+
+
+def run_t(text):
+    return f'<w:r><w:t xml:space="preserve">{text}</w:t></w:r>'
+
+
+def ins(text, author="Claude"):
+    return f'<w:ins w:id="1" w:author="{author}" w:date="2026-11-09T00:00:00Z">{run_t(text)}</w:ins>'
+
+
+def dele(text, author="Claude"):
+    return (f'<w:del w:id="2" w:author="{author}" w:date="2026-11-09T00:00:00Z"><w:r><w:delText xml:space="preserve">'
+            f'{text}</w:delText></w:r></w:del>')
+
+
+class TrackedChangeText(unittest.TestCase):
+    def test_accept_and_reject_read_the_tracked_changes(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            f = make_docx(Path(d) / "a.docx", [para(run_t("It is "), dele("sedement"), ins("sediment"), run_t(" here."))])
+            self.assertEqual(rf.doc_text(f, "accept"), ["It is sediment here."])
+            self.assertEqual(rf.doc_text(f, "reject"), ["It is sedement here."])
+            self.assertEqual(rf.doc_text(f), ["It is sediment here."])
+
+    def test_a_paragraph_mark_insertion_and_field_instructions_do_not_confuse_it(self):
+        mark = '<w:pPr><w:rPr><w:ins w:id="9" w:author="Claude" w:date="x"/></w:rPr></w:pPr>'
+        instr = '<w:r><w:instrText xml:space="preserve"> ADDIN X </w:instrText></w:r>'
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            f = make_docx(Path(d) / "a.docx", [para(mark, run_t("Keep "), instr, dele("old"), ins("new"))])
+            self.assertEqual(rf.doc_text(f, "reject"), ["Keep old"])
+            self.assertEqual(rf.doc_text(f, "accept"), ["Keep new"])
+
+
+class ProofreadFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.fx = rf.Proofread()
+        self.root = (self.work / "Notes")
+        self.root.mkdir()
+        planted = [para(run_t("The " + " ".join(w for _, w in rf.Proofread.PLANTS))), para(run_t("Poem line one")),
+                   para(run_t("Poem line two"))]
+        make_docx(self.root / "Estuary Notes.docx", planted)
+        self.fx.root = self.root
+        self.fx.planted = rf.doc_text(self.root / "Estuary Notes.docx")
+        self.fx.before = rf.tree_hashes(self.root)
+        self.saved_run = rf.word_run
+        rf.word_run = lambda script, timeout=180: (0, "revisions=12 comments=1")
+        self.addCleanup(setattr, rf, "word_run", self.saved_run)
+
+    def corrected(self, comments=(), author="Claude", fix=True, extra_change=False, break_tracking=False):
+        first = []
+        for old, new in rf.Proofread.PLANTS:
+            wrong, right = new, old
+            first += [dele(wrong, author), ins(right if fix else wrong, author), run_t(" ")]
+        if break_tracking:
+            first[0] = run_t("silently changed ")
+        paras = [para(*[run_t("The ")] + first), para(run_t("Poem line one")),
+                 para(run_t("Poem line two") if not extra_change else ins("Poem line 2"))]
+        path = make_docx(self.root / "Estuary Notes - proofread.docx", paras)
+        if comments:
+            import zipfile
+            body = "".join(f'<w:comment w:id="{i}" w:author="Claude"><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:comment>'
+                           for i, c in enumerate(comments))
+            with zipfile.ZipFile(path, "a") as z:
+                z.writestr("word/comments.xml", "<w:comments xmlns:w=\"x\">" + body + "</w:comments>")
+        return path
+
+    def results(self, reply="Citation accuracy is not checked here; see citation-check."):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, reply, self.fx.before)}
+
+    def test_a_good_proofread_passes_every_check(self):
+        self.corrected(comments=["Short comment about flow."])
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_planted_problem_fails_its_check(self):
+        c = self.fx.checks_listed
+        cases = [
+            (dict(fix=False), c[3]),
+            (dict(author="Someone"), c[4]),
+            (dict(extra_change=True), c[5]),
+            (dict(break_tracking=True), c[2]),
+            (dict(comments=["x"] * 6), c[6]),
+            (dict(comments=["word " * 51]), c[6]),
+        ]
+        for kwargs, check in cases:
+            self.corrected(**kwargs)
+            self.assertFalse(self.results()[check], (kwargs, check))
+
+    def test_missing_copy_changed_original_and_reply(self):
+        self.assertFalse(self.results()[self.fx.checks_listed[0]])
+        self.corrected()
+        self.assertFalse(self.results("Done.")[self.fx.checks_listed[7]])
+        (self.root / "Estuary Notes.docx").write_bytes(b"changed")
+        self.assertFalse(self.results()[self.fx.checks_listed[1]])
+
+    def test_word_failure_is_reported(self):
+        self.corrected()
+        rf.word_run = lambda script, timeout=180: (1, "the file is corrupt")
+        self.assertFalse(self.results()[self.fx.checks_listed[8]])
+
+    def test_the_fixture_is_skipped_without_its_source(self):
+        class Args:
+            estuary_doc = str(self.work / "missing.doc")
+        with self.assertRaises(rf.Skip):
+            rf.Proofread().build(self.work / "x", Args())
+
+    def test_every_plant_is_a_distinct_fault_the_check_can_see(self):
+        for old, new in rf.Proofread.PLANTS:
+            self.assertNotEqual(old, new)
+        for word in rf.Proofread.MUST_NOT_REMAIN:
+            self.assertTrue(any(word in new for _, new in rf.Proofread.PLANTS), word)
+        for word in rf.Proofread.MUST_REMAIN:
+            self.assertTrue(any(word in old for old, _ in rf.Proofread.PLANTS), word)
+
+
+class CitationCheckFixture(Base):
+    def setUp(self):
+        super().setUp()
+        import sqlite3
+        self.lib = self.work / "Test Library.enl"
+        self.lib.write_bytes(b"enl")
+        data = self.work / "Test Library.Data" / "sdb"
+        data.mkdir(parents=True)
+        con = sqlite3.connect(data / "sdb.eni")
+        con.execute("create table refs (id integer primary key, author text, year text, title text, number text, reference_type integer)")
+        con.executemany("insert into refs values (?,?,?,?,?,?)", [
+            (1, "World Economic Forum,", "2023", "Global Risks Report 2023", "May 2025", 16),
+            (2, "IPCC", "2023", "AR6 Synthesis Report: Climate Change 2023", "", 16),
+            (3, "WorldPop", "2025", "Open Spatial Demographic Data and Research", "", 16)])
+        con.commit()
+        con.close()
+
+        class Args:
+            test_library = str(self.lib)
+        self.fx = rf.CitationCheck()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", Args())
+
+    def fields(self):
+        import zipfile
+        import xml.etree.ElementTree as ET
+        xml = zipfile.ZipFile(self.fx.manuscript).read("word/document.xml").decode("utf-8")
+        found = []
+        for m in re.finditer(r'fldCharType="begin"/>(.*?)fldCharType="end"/>', xml, re.S):
+            instr = html_unescape("".join(re.findall(r"<w:instrText[^>]*>([^<]*)</w:instrText>", m.group(1))))
+            self.assertTrue(instr.strip().startswith("ADDIN EN.CITE"))
+            tree = ET.fromstring(instr.strip()[len("ADDIN EN.CITE"):])
+            cite = tree.find("Cite")
+            found.append((cite.findtext("RecNum"), cite.findtext("Year"), cite.find("record/titles").findtext("title")))
+        return found
+
+    def test_the_manuscript_holds_the_planted_fields(self):
+        fields = self.fields()
+        self.assertEqual(len(fields), 4)
+        self.assertEqual(fields[0], ("1", "2023", "Global Risks Report 2023"))
+        self.assertEqual(fields[1][0], "52")
+        self.assertEqual(fields[2][1], "2024")
+        self.assertEqual(fields[3][0], "99")
+        self.assertIn("--strict-mcp-config", self.fx.extra_args(self.root))
+        config = json.loads(self.fx.mcp_config.read_text(encoding="utf-8"))
+        self.assertEqual(config["mcpServers"]["endnote"]["env"]["ENDNOTE_LIBRARY_PATH"], str(self.lib.resolve()))
+
+    GOOD = ("""# Citation check
+
+| Reference | Finding |
+|---|---|
+| IPCC 2023 AR6 | resolved; the field rec-number 52 differs from the library record 2 |
+| WorldPop 2024 | year mismatch: field 2024, library 2025 |
+| Harrington and Osei 2021, Adaptive Planning Horizons | unresolved: no title match in the library |
+
+World Economic Forum 2023 was resolved with no issue. External verification was not done: not verified.
+""")
+
+    def write(self, text):
+        folder = self.root / "outputs" / "citation-check-manuscript-091126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "citation-check-report.md").write_text(text, encoding="utf-8")
+
+    def results(self):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, "", self.fx.before)}
+
+    def test_a_good_report_passes_and_each_fault_fails_its_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        c = self.fx.checks_listed
+        cases = [
+            (self.GOOD.replace("unresolved", "resolved"), c[1]),
+            (self.GOOD.replace("2024", "x"), c[2]),
+            (self.GOOD.replace("52", "n"), c[3]),
+            (self.GOOD + "\nWorld Economic Forum 2023: year mismatch\n", c[4]),
+            (self.GOOD.replace("External verification was not done: not verified.", ""), c[6]),
+        ]
+        for text, check in cases:
+            self.write(text)
+            self.assertFalse(self.results()[check], check)
+
+    def test_an_external_call_or_a_changed_library_is_caught(self):
+        self.write(self.GOOD)
+        logs = self.home / "projects" / rf.project_key(self.root)
+        logs.mkdir(parents=True)
+        entry = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "WebFetch", "input": {"url": "https://api.crossref.org/works/10.1/x"}}]}}
+        (logs / "s.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+        self.assertFalse(self.results()[self.fx.checks_listed[5]])
+        (logs / "s.jsonl").unlink()
+        self.assertTrue(self.results()[self.fx.checks_listed[5]])
+        self.lib.write_bytes(b"changed")
+        self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+    def test_the_fixture_is_skipped_without_a_library(self):
+        class Args:
+            test_library = None
+        saved = os.environ.pop("FIXTURE_ENDNOTE_LIBRARY", None)
+        try:
+            with self.assertRaises(rf.Skip):
+                rf.CitationCheck().build(self.work / "y", Args())
+        finally:
+            if saved:
+                os.environ["FIXTURE_ENDNOTE_LIBRARY"] = saved
+
+
+def html_unescape(text):
+    import html
+    return html.unescape(text)
 
 
 if __name__ == "__main__":
