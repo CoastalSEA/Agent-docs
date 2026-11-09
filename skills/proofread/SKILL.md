@@ -1,6 +1,6 @@
 ---
 name: proofread
-description: Proofread a Word manuscript for environmental-science academic writing, on a copy (never the original), using Track Changes for spelling/grammar and Comments for flow, phrasing, and voice/tense consistency. Also checks figure/table captions and cross-references, and that every in-text citation has a matching entry in the References section (and vice versa). Does not verify citations against their source — that is the separate citation-check skill.
+description: Proofread a Word manuscript for environmental-science academic writing, on a copy and never the original, with Track Changes for spelling and grammar and Comments for flow, phrasing and tense. Also checks captions, cross-references, and that citations match the References list. It does not verify citations against sources (citation-check does).
 context: fork
 agent: general-purpose
 background: true

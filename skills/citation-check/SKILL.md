@@ -1,6 +1,6 @@
 ---
 name: citation-check
-description: Verify every in-text citation in a Word manuscript that uses EndNote cite-while-write against the EndNote library, and against CrossRef/Semantic Scholar/OpenAlex/arXiv, flagging drift and fabrication without editing anything. With a "context" extension (--context, or a natural-language request like "citation check with context"), also verify each citing sentence's claim is supported by the cited source.
+description: Verify every in-text citation in a Word manuscript that uses EndNote cite-while-write against the EndNote library and against CrossRef, Semantic Scholar, OpenAlex and arXiv, flagging drift and fabrication without editing anything. Add --context (or ask for a citation check with context) to also check each citing sentence against its source.
 ---
 
 # Citation check

@@ -15,12 +15,16 @@ Usage:   python skills/check_frontmatter.py skills/<name>/SKILL.md [...]
          python skills/check_frontmatter.py skills/*/SKILL.md
 Inputs:  the SKILL.md files named on the command line.
 Outputs: one line per file on standard output (OK or FAIL), then up to six problems for a failing file. No file is written.
+         A warning line follows a file whose single-line description is over 350 characters (descriptions are loaded in
+         every session); a warning does not change the exit code.
          Exit code 1 if any file fails or has no frontmatter block, otherwise 0.
 
 Created using: Sonnet5-v1.0-date: 200926
 """
 import re
 import sys
+
+DESCRIPTION_LIMIT = 350
 
 sys.stdout.reconfigure(encoding="utf-8")
 TOP_KEY = re.compile(r"^([A-Za-z_][\w-]*):(\s|$)(.*)$")
@@ -54,6 +58,14 @@ def check(path):
     return problems
 
 
+def description_length(path):
+    """Length of the single-line description in the frontmatter, or None if there is none."""
+    text = open(path, encoding="utf-8").read().replace("\r\n", "\n")
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    d = re.search(r"^description: (.*)$", m.group(1), re.M) if m else None
+    return len(d.group(1)) if d else None
+
+
 def main(paths):
     failed = False
     for path in paths:
@@ -65,6 +77,9 @@ def main(paths):
         print(f"{path}: {'OK' if not problems else 'FAIL'}")
         for p in problems[:6]:
             print("   ", p)
+        n = description_length(path)
+        if n is not None and n > DESCRIPTION_LIMIT:
+            print(f"    warning: description is {n} characters (limit {DESCRIPTION_LIMIT}); the description is loaded in every session")
         failed = failed or bool(problems)
     return 1 if failed else 0
 

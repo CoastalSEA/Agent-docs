@@ -1,6 +1,6 @@
 ---
 name: literature-search
-description: Search your EndNote library plus OpenAlex, arXiv, Semantic Scholar, Exa, and Consensus for literature matching a search-term query or an open research question (terms derived automatically for the latter, and reported plainly), dedupe results across sources, and produce a structured candidate list with metadata, abstracts, and local-PDF availability. Does not fetch full text, synthesize, evaluate, or draw conclusions about the literature — full-text reading is the separate `pdf` skill's job on candidates you select, and synthesis is done by direct reasoning over this skill's output, not by this skill.
+description: Search the EndNote library, OpenAlex, arXiv, Semantic Scholar, Exa and Consensus for a search-term query or an open research question, dedupe across sources and return a structured candidate list with metadata, abstracts and local-PDF availability. It does not read full text or synthesize; the pdf skill reads the candidates you select.
 context: fork
 agent: general-purpose
 background: true

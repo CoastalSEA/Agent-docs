@@ -172,6 +172,21 @@ class Skills(unittest.TestCase):
                             *map(str, skills)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_descriptions_are_within_the_limit(self):
+        skills = sorted((REPO / "skills").glob("*/SKILL.md"))
+        r = subprocess.run([sys.executable, "-I", str(REPO / "skills" / "check_frontmatter.py"),
+                            *map(str, skills)], capture_output=True, text=True)
+        self.assertNotIn("warning", r.stdout)
+
+    def test_a_long_description_gives_a_warning_and_not_a_failure(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            f = Path(d) / "SKILL.md"
+            f.write_text("---\nname: x\ndescription: " + "word " * 80 + "\n---\nbody\n", encoding="utf-8")
+            r = subprocess.run([sys.executable, "-I", str(REPO / "skills" / "check_frontmatter.py"), str(f)],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("warning: description is", r.stdout)
+
     def test_skills_name_machine_md_not_a_literal_command(self):
         for p in (REPO / "skills").glob("*/SKILL.md"):
             self.assertNotRegex(read(p), r"python3?\.\d+\.exe", rel(p))

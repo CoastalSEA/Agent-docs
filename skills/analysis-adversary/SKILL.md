@@ -1,6 +1,6 @@
 ---
 name: analysis-adversary
-description: Try to break a reported quantitative result — a fitted value or a negative/no-model-found finding — before it is trusted or written up. Reproduce it independently from raw inputs, check whether the reproduction actually tests what it's claimed to, trace any reused parameter back through its own provenance, stress test it under defensible alternative specifications, and report what would change the answer. Never edits anything under review, because the review runs in a read-only Explore subagent. Use on any estimate or model-search conclusion heading for a paper, a report, or a decision. Not for exploratory analysis you already intend to redo yourself. Pass the result, the raw input paths and the code paths in the invocation arguments, because the skill runs in a forked context and cannot see the conversation.
+description: Try to break a reported quantitative result (a fitted value, or a no-model-found finding) before it is trusted or written up. Reproduce it from raw inputs, stress test it, and report what would change the answer. Not for exploratory work. Pass the result, raw input paths and code paths as arguments; it cannot see the conversation.
 context: fork
 agent: Explore
 background: true
