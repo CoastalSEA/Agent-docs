@@ -72,14 +72,36 @@ python deploy.py [status|apply|doctor] [--target PATH] [--diff] [--yes]
 
 ### First-time setup on a machine
 
-1. Copy `claude-md/user-files/machine.example.md` to `~/.claude/rules/machine.md` and
-   `claude-md/user-files/profile.example.md` to `~/.claude/rules/profile.md`. Fill in each file.
-   They hold what differs between users (interpreter paths, tools, writing rules) and are never
-   stored in this repo.
-2. Run `python deploy.py doctor`. It must report no problems.
-3. Run `python deploy.py status`, then `python deploy.py apply`.
-4. Start a new session and ask it to quote the `Marker:` line of each file. A missing rules file
+`deploy.py` does not create, fill in or detect anything for `machine.md` and `profile.md`. It never
+writes them. `doctor` only checks them (see Commands). You create both files from the blank forms,
+and a Claude session can help you fill in `machine.md`. Both files hold what differs between users
+(interpreter paths, tools, writing rules) and are never stored in this repo.
+
+1. **Terminal.** Copy `claude-md/user-files/machine.example.md` to `~/.claude/rules/machine.md` and
+   `claude-md/user-files/profile.example.md` to `~/.claude/rules/profile.md`. Create the
+   `rules/` folder first if it is missing.
+2. **Terminal or Claude session.** Fill in each file.
+   - `profile.md` holds your own writing rules and code header format. Write it by hand.
+   - `machine.md` holds the operating system, shells, interpreter and tool paths, and locations.
+     Fill it in by hand, or ask a Claude session to detect what it can (for example with
+     `where` or `which`, and a version query for each tool). The session must report each
+     assumption, ask you to choose where there is more than one candidate, and leave blank
+     anything it cannot detect. Review the result before you rely on it.
+3. **Terminal.** Run `python deploy.py doctor`. It must report no problems.
+4. **Terminal.** Run `python deploy.py status`, then `python deploy.py apply`. `apply` asks
+   `[y/N]` at a terminal. In a Claude session, ask the user before running it, because it
+   changes live configuration, and it needs `--yes` when no terminal is attached.
+5. **New Claude session.** Ask it to quote the `Marker:` line of each file. A missing rules file
    fails silently, and `doctor` cannot test that a session loads the files.
+
+| Task | Terminal | Claude session |
+|---|---|---|
+| Copy the blank forms | Yes | Possible, with your approval |
+| Fill in `profile.md` | Yes | Not recommended (your own rules) |
+| Fill in `machine.md` | Yes | Yes, for detectable items, with assumptions reported |
+| `doctor`, `status` | Yes | Yes (read only) |
+| `apply` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
+| Confirm that the files load | No | Yes (new session only) |
 
 ### Commands
 
