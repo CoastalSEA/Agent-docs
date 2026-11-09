@@ -1,12 +1,19 @@
 r"""Deploy the Agent-docs master files to the Claude configuration folder.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
+Modified using: claude-sonnet-5-5-v5.5-date: 091126 (init and help)
 
 Compares the master files in this repository with the live copies in the Claude configuration
-folder, and copies the ones that differ. Needs only Python 3 (standard library). Writes nothing
-unless the command is `apply`.
+folder, and copies the ones that differ. Creates the two local user files on a new machine.
+Needs only Python 3 (standard library). Writes nothing unless the command is `apply` or `init`.
 
 Usage (run from any folder; the repository is the folder that holds this script):
+  python deploy.py help       show the deployment instructions (the Deployment section of README.md)
+  python deploy.py init [--yes]         create <target>/rules/machine.md from values detected on this
+                                        machine, and <target>/rules/profile.md as a short stub.
+                                        Never overwrites a file that exists. Shows what it will write
+                                        and asks for confirmation on a terminal; without a terminal
+                                        `--yes` is required.
   python deploy.py [status]   show what differs; changes nothing; exit 1 if anything differs
   python deploy.py status --diff        also print a unified diff for each differing text file
   python deploy.py apply [--yes]        sync repository copies, back up each live file that will
@@ -27,17 +34,21 @@ Inputs:
 Outputs:
   `apply` writes the files above and copies each live file it replaces to
   <target>/backups/deploy-<DDMMYY-HHMM>/<path under target>. Nothing is ever deleted.
-  The local files <target>/rules/machine.md and profile.md are never written; the blank forms
-  are in claude-md/user-files/.
+  `init` writes <target>/rules/machine.md and profile.md only when they do not exist. Nothing
+  else ever writes them. The blank forms are in claude-md/user-files/.
 Line endings: files that differ only in line endings count as the same and are not copied.
 Not covered yet: agents, hooks, statusline, MCP servers.
 """
 import argparse
 import difflib
+import os
+import platform
 import re
 import shutil
+import subprocess
 import sys
-from datetime import datetime
+import sysconfig
+from datetime import date, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -157,6 +168,267 @@ def ask(prompt):
         return False
 
 
+# ---- init: detect this machine and write the two local user files ---------------------------------
+
+def run_text(cmd, timeout=15):
+    """Output (stdout and stderr) of a command, or an empty string if it cannot run."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout + r.stderr).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def first_line(text):
+    return next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+
+
+def newest(paths):
+    """The path that sorts highest when its numbers are compared as numbers."""
+    key = lambda p: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", str(p))]
+    return max(paths, key=key) if paths else None
+
+
+def bash_path(p):
+    """A Windows path in the form Git Bash uses: drive C, folder d -> /c/d."""
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", str(p))
+    return f"/{m.group(1).lower()}/{m.group(2).replace(chr(92), '/')}" if m else str(p)
+
+
+def program_files():
+    return Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+
+
+def find_tool(names, windows_globs=(), unix_globs=()):
+    """(path, on_path) for the first executable found, or (None, False)."""
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return Path(found).resolve(), True
+    pools = [(program_files(), g) for g in windows_globs] if os.name == "nt" else \
+            [(Path("/"), g) for g in unix_globs]
+    hits = [p for base, g in pools for p in base.glob(g)]
+    best = newest(hits)
+    return (best, False) if best else (None, False)
+
+
+def detect():
+    """Facts about this machine, the notes on how each was found, and what could not be found."""
+    f = {"notes": [], "undetected": []}
+    system = platform.system()
+    f["windows"] = system == "Windows"
+    if system == "Windows":
+        build = sys.getwindowsversion().build
+        f["os"] = "Windows 11" if build >= 22000 else "Windows 10"
+        f["notes"].append(f"Operating system: Windows build {build}; build 22000 or later is taken as Windows 11.")
+    elif system == "Darwin":
+        f["os"] = "macOS " + platform.mac_ver()[0]
+    else:
+        try:
+            f["os"] = platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
+        except (OSError, AttributeError):
+            f["os"] = "Linux"
+    f["home"] = str(Path.home())
+
+    # shells
+    git_bash = None
+    if f["windows"]:
+        git = shutil.which("git")
+        for parent in (Path(git).parents if git else []):
+            if (parent / "bin" / "bash.exe").exists():
+                git_bash = parent / "bin" / "bash.exe"
+                break
+        shells = []
+        if git_bash:
+            shells.append("Git Bash (the Bash tool)")
+        else:
+            f["undetected"].append("Git Bash was not found next to git. Claude Code needs it on Windows.")
+        if shutil.which("pwsh"):
+            shells.append("PowerShell 7")
+        ps = shutil.which("powershell")
+        if ps:
+            v = first_line(run_text([ps, "-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"]))
+            shells.append("PowerShell " + ".".join(v.split(".")[:2]) if re.match(r"^\d+(\.\d+)*$", v) else "PowerShell")
+        f["shells"] = " and ".join(shells) if shells else "none found"
+    else:
+        found = [s for s in ("bash", "zsh") if shutil.which(s)]
+        login = Path(os.environ.get("SHELL", "")).name
+        f["shells"] = " and ".join(found) if found else "none found"
+        if login:
+            f["shells"] += f". Login shell: {login}"
+            f["notes"].append("Bash tool shell: not detected; the login shell from $SHELL is listed instead.")
+    f["bash_form"] = bool(git_bash) if f["windows"] else False
+
+    # python
+    py = Path(sys.executable)
+    f["python"] = py
+    plain = shutil.which("python")
+    if plain is None:
+        f["plain_python"] = "no (not on PATH)"
+    elif "WindowsApps" in plain:
+        f["plain_python"] = "no (a Windows Store stub)"
+    elif Path(plain).resolve() == py.resolve():
+        f["plain_python"] = "yes"
+    else:
+        f["plain_python"] = f"yes, but it is another interpreter ({plain})"
+    marker = Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED"
+    f["pip"] = "only inside a venv (this interpreter is externally managed)" if marker.exists() \
+        else "in any environment (no externally-managed marker was found)"
+    f["notes"].append(f"Python: the interpreter that is running this script ({py}).")
+
+    # other tools
+    tools = []
+    r, on_path = find_tool(["Rscript"], [r"R/R-*/bin/x64/Rscript.exe", r"R/R-*/bin/Rscript.exe"],
+                           ["Library/Frameworks/R.framework/Resources/bin/Rscript", "usr/lib/R/bin/Rscript"])
+    if r:
+        v = re.search(r"version (\d+(\.\d+)+)", run_text([str(r), "--version"]))
+        tools.append(("R", r, on_path, f"R {v.group(1)}" if v else "R"))
+    else:
+        f["undetected"].append("R (Rscript) was not found.")
+    m, on_path = find_tool(["matlab"], [r"MATLAB/R*/bin/win64/MATLAB.exe"],
+                           ["Applications/MATLAB_R*.app/bin/matlab", "usr/local/MATLAB/R*/bin/matlab"])
+    if m:
+        rel = re.search(r"R20\d\d[ab]", str(m))
+        tools.append(("MATLAB", m, on_path, f"MATLAB {rel.group(0)}" if rel else "MATLAB"))
+    else:
+        f["undetected"].append("MATLAB was not found.")
+    t, on_path = find_tool(["tesseract"], [r"Tesseract-OCR/tesseract.exe"],
+                           ["opt/homebrew/bin/tesseract", "usr/local/bin/tesseract"])
+    if t:
+        v = re.search(r"tesseract (\S+)", run_text([str(t), "--version"]))
+        langs = [ln.strip() for ln in run_text([str(t), "--list-langs"]).splitlines()[1:] if ln.strip()]
+        label = f"Tesseract {v.group(1)}" if v else "Tesseract"
+        if langs:
+            label += ", languages " + " and ".join(langs[:8])
+        tools.append(("OCR", t, on_path, label))
+    else:
+        f["undetected"].append("Tesseract (OCR) was not found.")
+    f["tools"] = tools
+    f["undetected"] += ["EndNote library and server registration (add by hand if you use them).",
+                        "Python environments and any rule about what may be installed in them.",
+                        "Your private companion repository, if you keep one."]
+    return f
+
+
+def render_machine(f, scripts, repo, config, today=None):
+    """The text of machine.md for the facts in f."""
+    today = today or date.today().strftime("%d%m%y")
+    win, bash = f["windows"], f["bash_form"]
+    py = str(f["python"])
+
+    def forms(path, ps_prefix=""):
+        """The Bash and PowerShell forms of a path, or the one form on other systems."""
+        if not win:
+            return f'`"{path}"`'
+        out = []
+        if bash:
+            out.append(f'Bash `"{bash_path(path)}"`')
+        out.append(f"PowerShell `{ps_prefix}{path}`")
+        return "; ".join(out)
+
+    def command(script):
+        tail = '<command> <task> --root "<project root>"'
+        if not win:
+            return f'`"{py}" "{scripts / script}" {tail}`'
+        out = []
+        if bash:
+            out.append(f'Bash `"{bash_path(py)}" "{bash_path(scripts / script)}" {tail}`')
+        out.append(f'PowerShell `& "{py}" "{scripts / script}" {tail}`')
+        return "; ".join(out)
+
+    lines = ["# Machine file", "", "Marker: machine-file-v1", "",
+             f"Created by `deploy.py init` on {today} from detected values. Edit freely. The file is local to this machine.",
+             "", "## System", "",
+             f"- Operating system: {f['os']}.",
+             f"- Shells: {f['shells']}.",
+             f"- Home folder: `{f['home']}`" + (f" (`{bash_path(f['home'])}` in Git Bash)." if bash else "."),
+             "- Path style in commands: " + ("`C:\\...` in PowerShell" + (", `/c/...` in Git Bash." if bash else ".")
+                                              if win else "`/...`."),
+             "", "## Commands", "",
+             f"- Python: {forms(py)}. Plain `python` works: {f['plain_python']}. `pip` works: {f['pip']}.",
+             f"- Run control: {command('run_control.py')}. The commands are `start`, `path`, `check`, `accept`, "
+             "`reject`, `discard` and `status`. For `accept` and `reject` the question follows the task: "
+             '`accept <task> "<question>"`.',
+             "- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` "
+             "(`archive`, `restore`, `list`) and `check_records.py` (the records check). Use the Python and "
+             "path forms of the run control line, with the script name replaced."]
+    for name, path, on_path, label in f["tools"]:
+        where = "on `PATH`" if on_path else "not on `PATH`"
+        if name == "MATLAB":
+            ex = "-batch \"run('script.m')\""
+            call = (f'Bash `"{bash_path(path)}" {ex}`; ' if bash else "") + \
+                   (f'PowerShell `& "{path}" {ex}`' if win else f'`"{path}" {ex}`')
+            lines.append(f"- MATLAB: {label} at {forms(path)}, {where}. Run scripts with `-batch`, for example {call}.")
+        else:
+            lines.append(f"- {name}: {label}, {where}. {forms(path)}.")
+    lines += ["", "## Locations", "",
+              f"- This repository: `{repo}`.",
+              f"- Claude configuration folder: `{config}`.", ""]
+    return "\n".join(lines)
+
+
+def render_profile(today=None):
+    """The text of profile.md: a stub, because the rules are the user's own."""
+    today = today or date.today().strftime("%d%m%y")
+    return "\n".join([
+        "# Profile file", "", "Marker: profile-file-v1", "",
+        f"Created by `deploy.py init` on {today}. Add your own rules for writing and for code. The file is local to one user.",
+        "", "## Writing rules", "", "- None set. Ask the user before assuming a style.", "",
+        "## Code standards", "", "- Header format: not set. Ask the user before choosing one.", ""])
+
+
+def init(target, yes):
+    rules = target / "rules"
+    f = detect()
+    machine = render_machine(f, target / "scripts", REPO, target)
+    plan = []
+    print(f"Target: {target}\n")
+    for path, text in ((rules / "machine.md", machine), (rules / "profile.md", render_profile())):
+        if path.exists():
+            print(f"  EXISTS   {path}  (left alone)")
+        else:
+            print(f"  CREATE   {path}")
+            plan.append((path, text))
+    if not plan:
+        print("\nNothing to create.")
+        return 0
+    print("\nValues detected on this machine (review them before you rely on them):")
+    for n in f["notes"]:
+        print(f"  - {n}")
+    print("\nNot detected, so not written:")
+    for u in f["undetected"]:
+        print(f"  - {u}")
+    if any(p.name == "machine.md" for p, _ in plan):
+        print("\nmachine.md will contain:\n")
+        print("\n".join("    " + ln for ln in machine.splitlines()))
+    if not yes and not ask("\nCreate these files? [y/N] "):
+        print("\nNothing created. Re-run with --yes to confirm without a terminal.")
+        return 1
+    for path, text in plan:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
+        print(f"Created {path}")
+    print("\nNext: edit the files if needed, run `deploy.py apply` to install the shared files, then "
+          "`deploy.py doctor`. Run `deploy.py help` for the full steps.")
+    return 0
+
+
+def show_help():
+    """Print the deployment instructions: the Deployment section of README.md."""
+    readme = REPO / "README.md"
+    print("deploy.py: install the Agent-docs files into the Claude configuration folder.\n")
+    if readme.exists():
+        text = readme.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+        m = re.search(r"^## Deployment\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+        if m:
+            print(m.group(1).strip("\n"))
+            return 0
+    print("README.md or its Deployment section was not found. The usage is at the top of deploy.py.")
+    return 1
+
+
+# ---- doctor ---------------------------------------------------------------------------------------
+
 def abs_paths(text):
     """Absolute paths named in the code spans of a markdown file."""
     found = []
@@ -189,7 +461,8 @@ def doctor(target):
     for name, marker in MARKERS.items():
         f = rules / name
         if not f.exists():
-            print(f"  MISSING  {f}\n           copy claude-md/user-files/{name[:-3]}.example.md there and fill it in")
+            print(f"  MISSING  {f}\n           run `deploy.py init` to create it, or copy "
+                  f"claude-md/user-files/{name[:-3]}.example.md there and fill it in")
             problems += 1
             continue
         t = f.read_text(encoding="utf-8", errors="replace")
@@ -216,12 +489,17 @@ def doctor(target):
 
 def main(argv):
     ap = argparse.ArgumentParser(prog="deploy.py", description="Deploy the Agent-docs master files.")
-    ap.add_argument("command", nargs="?", default="status", choices=["status", "apply", "doctor"])
+    ap.add_argument("command", nargs="?", default="status",
+                    choices=["status", "apply", "init", "doctor", "help"])
     ap.add_argument("--target", default=str(Path.home() / ".claude"))
     ap.add_argument("--diff", action="store_true")
     ap.add_argument("--yes", action="store_true")
     a = ap.parse_args(argv)
     target = Path(a.target).expanduser().resolve()
+    if a.command == "help":
+        return show_help()
+    if a.command == "init":
+        return init(target, a.yes)
     if a.command == "status":
         return 1 if status(target, a.diff)[0] else 0
     if a.command == "apply":

@@ -411,6 +411,35 @@ class Deploy(unittest.TestCase):
         self.assertIn("local edit", backups[0].read_text(encoding="utf-8"))
         self.assertNotIn("local edit", live.read_text(encoding="utf-8"))
 
+    def test_init_needs_yes_without_a_terminal_and_creates_nothing(self):
+        r = subprocess.run([sys.executable, "-I", str(DEPLOY), "init", "--target", str(self.target)],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse((self.target / "rules").exists())
+
+    def test_init_creates_both_files_and_doctor_passes_after_apply(self):
+        self.assertEqual(self.dep("init", "--yes").returncode, 0)
+        for name, marker in (("machine.md", "machine-file-v1"), ("profile.md", "profile-file-v1")):
+            self.assertIn(f"Marker: {marker}", (self.target / "rules" / name).read_text(encoding="utf-8"))
+        self.assertEqual(self.dep("apply", "--yes").returncode, 0)
+        r = self.dep("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_init_never_overwrites_an_existing_file(self):
+        rules = self.target / "rules"
+        rules.mkdir(parents=True)
+        (rules / "profile.md").write_text("my own rules", encoding="utf-8")
+        self.assertEqual(self.dep("init", "--yes").returncode, 0)
+        self.assertEqual((rules / "profile.md").read_text(encoding="utf-8"), "my own rules")
+        self.assertTrue((rules / "machine.md").exists())
+        self.assertIn("Nothing to create", self.dep("init", "--yes").stdout)
+
+    def test_help_prints_the_deployment_section(self):
+        r = self.dep("help")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("First-time setup", r.stdout)
+        self.assertIn("deploy.py init", r.stdout)
+
     def test_doctor_reports_missing_user_files(self):
         r = self.dep("doctor")
         self.assertEqual(r.returncode, 1)

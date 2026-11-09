@@ -127,6 +127,43 @@ class Readme(unittest.TestCase):
         self.assertEqual(missing, [], "README Structure lists names that do not exist")
 
 
+class InitOutput(unittest.TestCase):
+    """The text that `deploy.py init` writes must follow the blank forms."""
+
+    def facts(self, windows):
+        return {"windows": windows, "bash_form": windows, "os": "Windows 11" if windows else "Linux",
+                "shells": "Git Bash (the Bash tool) and PowerShell 5.1" if windows else "bash", "home": "/home/u",
+                "python": Path("/usr/bin/python3"), "plain_python": "no (not on PATH)",
+                "pip": "in any environment (no externally-managed marker was found)", "tools": []}
+
+    def headings(self, text):
+        return [ln for ln in text.split(chr(10)) if ln.startswith("#")]
+
+    def test_machine_text_has_the_marker_and_headings_of_the_form(self):
+        deploy = load_deploy()
+        form = read(REPO / "claude-md" / "user-files" / "machine.example.md")
+        for windows in (False, True):
+            text = deploy.render_machine(self.facts(windows), Path("/s/scripts"), Path("/r"), Path("/c"), today="010101")
+            self.assertIn("Marker: machine-file-v1", text)
+            self.assertNotIn("Copy this form to", text)
+            self.assertEqual([h for h in self.headings(form) if h in self.headings(text)], self.headings(text))
+            self.assertIn("run_control.py", text)
+
+    def test_windows_text_gives_both_shell_forms(self):
+        deploy = load_deploy()
+        text = deploy.render_machine(self.facts(True), Path("C:/s/scripts"), Path("C:/r"), Path("C:/c"), today="010101")
+        self.assertIn("Bash `", text)
+        self.assertIn("PowerShell `", text)
+
+    def test_profile_text_has_the_marker_and_headings_of_the_form(self):
+        deploy = load_deploy()
+        form = read(REPO / "claude-md" / "user-files" / "profile.example.md")
+        text = deploy.render_profile(today="010101")
+        self.assertIn("Marker: profile-file-v1", text)
+        self.assertNotIn("Copy this form to", text)
+        self.assertEqual(self.headings(text), self.headings(form))
+
+
 class Skills(unittest.TestCase):
     def test_every_skill_frontmatter_parses(self):
         skills = sorted((REPO / "skills").glob("*/SKILL.md"))

@@ -67,39 +67,43 @@ only Python 3 and no other package. Run it from the repo root with any Python 3 
 (the command for this machine is in `machine.md`):
 
 ```
-python deploy.py [status|apply|doctor] [--target PATH] [--diff] [--yes]
+python deploy.py [help|init|status|apply|doctor] [--target PATH] [--diff] [--yes]
 ```
+
+`python deploy.py help` prints these instructions.
 
 ### First-time setup on a machine
 
-`deploy.py` does not create, fill in or detect anything for `machine.md` and `profile.md`. It never
-writes them. `doctor` only checks them (see Commands). You create both files from the blank forms,
-and a Claude session can help you fill in `machine.md`. Both files hold what differs between users
-(interpreter paths, tools, writing rules) and are never stored in this repo.
+Two small files hold what differs from one user to the next: `~/.claude/rules/machine.md` (the
+system, shells, interpreter and tool paths, and locations) and `~/.claude/rules/profile.md` (your
+own writing rules and code header format). They are never stored in this repo. `init` creates both.
 
-1. **Terminal.** Copy `claude-md/user-files/machine.example.md` to `~/.claude/rules/machine.md` and
-   `claude-md/user-files/profile.example.md` to `~/.claude/rules/profile.md`. Create the
-   `rules/` folder first if it is missing.
-2. **Terminal or Claude session.** Fill in each file.
-   - `profile.md` holds your own writing rules and code header format. Write it by hand.
-   - `machine.md` holds the operating system, shells, interpreter and tool paths, and locations.
-     Fill it in by hand, or ask a Claude session to detect what it can (for example with
-     `where` or `which`, and a version query for each tool). The session must report each
-     assumption, ask you to choose where there is more than one candidate, and leave blank
-     anything it cannot detect. Review the result before you rely on it.
-3. **Terminal.** Run `python deploy.py doctor`. It must report no problems.
-4. **Terminal.** Run `python deploy.py status`, then `python deploy.py apply`. `apply` asks
-   `[y/N]` at a terminal. In a Claude session, ask the user before running it, because it
-   changes live configuration, and it needs `--yes` when no terminal is attached.
+1. **Terminal.** Run `python deploy.py init`. It detects the operating system, shells, Python,
+   and R, MATLAB and Tesseract if they are installed. It shows what it found and the text it will
+   write, then asks `[y/N]`. It creates `machine.md` and a short `profile.md` stub, and it never
+   overwrites a file that exists. To do this by hand instead, copy
+   `claude-md/user-files/machine.example.md` and `profile.example.md` to `~/.claude/rules/`
+   and fill them in.
+2. **Terminal.** Review the files. Add what `init` could not detect: the EndNote library and
+   server, rules for Python environments, and a private companion repository if you keep one. Write
+   `profile.md` by hand, because it holds your own rules. A Claude session can help with
+   `machine.md`, but it must report each assumption and leave blank what it cannot detect.
+3. **Terminal.** Run `python deploy.py status`, then `python deploy.py apply`. This installs the
+   global rules, the skills and the scripts. `apply` asks `[y/N]` at a terminal.
+4. **Terminal.** Run `python deploy.py doctor`. It must report no problems. Run it after
+   `apply`, because `machine.md` names the scripts that `apply` installs.
 5. **New Claude session.** Ask it to quote the `Marker:` line of each file. A missing rules file
    fails silently, and `doctor` cannot test that a session loads the files.
 
+In a Claude session, ask the user before running `init` or `apply`, because both write under
+`~/.claude`. Without a terminal they need `--yes`.
+
 | Task | Terminal | Claude session |
 |---|---|---|
-| Copy the blank forms | Yes | Possible, with your approval |
-| Fill in `profile.md` | Yes | Not recommended (your own rules) |
-| Fill in `machine.md` | Yes | Yes, for detectable items, with assumptions reported |
-| `doctor`, `status` | Yes | Yes (read only) |
+| `help`, `status`, `doctor` | Yes | Yes (read only) |
+| `init` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
+| Edit `machine.md` | Yes | Yes, for what `init` could not detect, with assumptions reported |
+| Edit `profile.md` | Yes | Not recommended (your own rules) |
 | `apply` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
 | Confirm that the files load | No | Yes (new session only) |
 
@@ -107,6 +111,8 @@ and a Claude session can help you fill in `machine.md`. Both files hold what dif
 
 | Command | What it does | Writes anything? |
 |---|---|---|
+| `help` | Prints the Deployment section of this README. | No |
+| `init` | Creates `<target>/rules/machine.md` from values detected on this machine, and `profile.md` as a stub, only for a file that does not exist. Shows the detected values and the text first, then asks `[y/N]` at a terminal. Without a terminal it creates nothing unless `--yes` is given. Never overwrites. | Yes (new files only) |
 | `status` (default) | Lists each master file as `same`, `DIFFERS` or `MISSING` against its live copy. Files that differ only in line endings show as `same*` and are not copied. Lists live skills that are not in the repo, and leaves them alone. Exits 1 if any file would be copied. `--diff` also prints a unified diff for each differing text file. | No |
 | `apply` | Rewrites `claude-md/project-template/CLAUDE.md` from `claude-md/project-CLAUDE.md` (the master), copies each file that differs or is missing, then compares again. Before it replaces a live file it copies that file to `<target>/backups/deploy-<DDMMYY-HHMM>/`. It asks `[y/N]` at a terminal. Without a terminal it copies nothing unless `--yes` is given. | Yes |
 | `doctor` | Checks `~/.claude/rules/machine.md` and `profile.md`: each file is present, has its `Marker:` line and is filled in, and every absolute path named in `machine.md` exists. Exits 1 on any problem. | No |
@@ -133,8 +139,9 @@ configuration.
   one project only is copied into that project's `.claude/skills/` by hand.
 - **Project templates.** The template folders in `claude-md/` are copied into a project by hand.
   `deploy.py` only keeps the two copies of the project `CLAUDE.md` in step.
-- **The two local user files.** `machine.md` and `profile.md` are never written or overwritten.
-  The blank forms are in `claude-md/user-files/`.
+- **Updates to the two local user files.** Only `init` writes `machine.md` and `profile.md`, and only
+  when a file is missing. Nothing updates or overwrites them. The blank forms are in
+  `claude-md/user-files/`.
 - **Prompts.** The templates in `prompts/` are copied into a task by hand.
 - **Deletions.** The script never deletes. A skill removed or renamed in the repo stays in the
   live folder until it is removed by hand. Live skills with no repo copy are listed and left alone.
