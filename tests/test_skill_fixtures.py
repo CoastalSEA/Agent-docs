@@ -549,6 +549,22 @@ class LiteratureSearchExternalFixture(Base):
     def results(self):
         return {n: ok for n, ok, _ in self.fx.check(self.root, "", self.fx.before)}
 
+    def sections(self, n=6):
+        blocks = [f"### {i + 1}. Title {i}\n\n- Authors: A\n- Year: {2000 + i}\n- DOI: 10.1000/s{i}\n- Type: "
+                  f"{'peer-reviewed' if i % 2 else 'grey literature'}\n" for i in range(n)]
+        return "# Report\n\nOpenAlex: 10 hits.\n\n## 2. Candidate list\n\n" + "\n".join(blocks)
+
+    def test_numbered_sections_count_as_candidates(self):
+        self.write(self.sections(), self.ris())
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        self.write(self.sections(n=3), self.ris(n=3))
+        self.assertFalse(self.results()[self.fx.checks_listed[2]])
+        self.write(self.sections().replace("peer-reviewed", "article"), self.ris())
+        self.assertFalse(self.results()[self.fx.checks_listed[2]])
+        self.write(self.sections(), self.ris(n=4))
+        self.assertFalse(self.results()[self.fx.checks_listed[5]])
+
     def test_it_is_skipped_unless_external_is_given(self):
         class NoExternal(self.Args):
             external = False

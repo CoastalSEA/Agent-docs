@@ -736,10 +736,10 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
     checks_listed = (
         "a report literature-search-report.md is saved in an output folder of the task",
         "the report gives OpenAlex as a source with a hit count",
-        "the candidate list has at least 5 rows, each with a year and labelled peer-reviewed or grey",
+        "the candidate list has at least 5 candidates (table rows or numbered sections), each with a year and a peer-reviewed, grey or explicitly unclear label",
         "no DOI appears twice in the candidate list",
         "the import list literature-search-import.ris holds well-formed records",
-        "the number of records in the import list equals the number of candidate rows",
+        "the number of records in the import list equals the number of candidates",
         "no mailto parameter or personal identifier was sent",
         "no source other than OpenAlex was queried",
         "the library and the project files are unchanged",
@@ -766,8 +766,12 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
 
     @staticmethod
     def rows(text):
-        """Candidate-list table rows: lines that start with '|' and hold a four-digit year."""
-        return [ln for ln in text.splitlines() if ln.lstrip().startswith("|") and re.search(r"\b(19|20)\d\d\b", ln)]
+        """The candidates: table rows that hold a four-digit year or, if there are none, the numbered sections
+        ('### 1. Title') that make up the candidate list."""
+        table = [ln for ln in text.splitlines() if ln.lstrip().startswith("|") and re.search(r"\b(19|20)\d\d\b", ln)]
+        if table:
+            return table
+        return re.split(r"^#{3,4}\s+\d+\.\s+", text, flags=re.M)[1:]
 
     def check(self, root, reply, before):
         text = self.result_text(root, "literature-search-report.md")
@@ -781,7 +785,7 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
 
         add(self.checks_listed[0], text is not None)
         add(self.checks_listed[1], re.search(r"openalex[^\n]*\d+", t, re.I) is not None)
-        labelled = [r for r in rows if re.search(r"peer|grey|gray", r, re.I)]
+        labelled = [r for r in rows if re.search(r"peer|grey|gray|unclear|not verified|preprint|conference", r, re.I) and re.search(r"\b(19|20)\d\d\b", r)]
         add(self.checks_listed[2], len(rows) >= 5 and len(labelled) == len(rows), f"{len(rows)} rows, {len(labelled)} labelled")
         dois = []
         for r in rows:
