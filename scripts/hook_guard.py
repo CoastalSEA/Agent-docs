@@ -94,7 +94,8 @@ def after_cd(words, base, root):
     """The folder after a `cd` segment: absolute targets replace it, relative ones add to it, and a
     target that holds a variable, ~ or a command substitution makes it unknown ("?")."""
     target = words[1].strip("\"'") if len(words) > 1 else ""
-    if not target or re.search(r"[$~`]", target) or base == "?" and not re.match(r"^([a-z]:)?/", target):
+    if not target or target.startswith("~") or re.search(r"[$`]", target) \
+            or base == "?" and not re.match(r"^([a-z]:)?/", target):
         return "?"
     if re.match(r"^([a-z]:)?/", target):
         return posixpath.normpath(target)

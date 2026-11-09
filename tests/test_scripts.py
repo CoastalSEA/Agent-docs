@@ -780,6 +780,8 @@ class HookGuard(Project):
         self.assertTrue(self.blocked("Bash", command=f"cd {other} && cd {here} && rm data/a.csv"))
         self.assertTrue(self.blocked("Bash", command=f"cd {other} && rm {here}/data/a.csv"))
         self.assertTrue(self.blocked("Bash", command="cd . && rm data/a.csv"))
+        self.assertTrue(self.blocked("Bash", command=f"cd C:/Users/RUNNER~1/x && cd {here} && rm data/a.csv"))
+        self.assertFalse(self.blocked("Bash", command="cd ~/work && rm data/a.csv"))
         self.assertTrue(self.blocked("Bash", command="mkdir x; cd x; cd .. ; rm data/a.csv"))
 
     def test_text_in_a_here_document_is_not_a_command(self):
