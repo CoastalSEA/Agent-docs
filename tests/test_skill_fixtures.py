@@ -428,5 +428,164 @@ def html_unescape(text):
     return html.unescape(text)
 
 
+def make_library(work, titles):
+    """A fake EndNote library: an .enl file and the .Data/sdb/sdb.eni database with the given titles."""
+    import sqlite3
+    lib = Path(work) / "Test Library.enl"
+    lib.write_bytes(b"enl")
+    data = Path(work) / "Test Library.Data" / "sdb"
+    data.mkdir(parents=True)
+    con = sqlite3.connect(data / "sdb.eni")
+    con.execute("create table refs (id integer primary key, author text, year text, title text, number text, "
+                "reference_type integer)")
+    con.executemany("insert into refs values (?,?,?,?,?,?)", [(i + 1, "A", "2025", t, "", 16) for i, t in enumerate(titles)])
+    con.commit()
+    con.close()
+    return lib
+
+
+def write_transcript(home, root, entries):
+    logs = home / "projects" / rf.project_key(root)
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "s.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+
+
+def tool_call(name, **inputs):
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inputs}]}}
+
+
+class LiteratureSearchFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.lib = make_library(self.work, ["Global Risks Report", "Theatre in Education", "Serious game",
+                                            "Open Spatial Demographic Data and Research", "AR6 Synthesis Report"])
+
+        class Args:
+            test_library = str(self.lib)
+        self.fx = rf.LiteratureSearch()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", Args())
+
+    GOOD = ("# Literature search\n\nDerived search terms: theatre, serious game.\n\n"
+            "Sources: EndNote library, 2 hits. No external source was queried (OpenAlex not queried).\n\n"
+            "| Title | Local PDF |\n|---|---|\n| Theatre in Education | no PDF linked |\n| Serious game | no PDF linked |\n")
+
+    def write(self, text):
+        folder = self.root / "outputs" / "literature-search-public-engagement-091126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "literature-search-report.md").write_text(text, encoding="utf-8")
+
+    def results(self, reply="The run is pending review."):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, reply, self.fx.before)}
+
+    def test_a_good_report_passes_and_each_fault_fails_its_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        c = self.fx.checks_listed
+        cases = [
+            (self.GOOD.replace("Theatre in Education", "x"), c[2]),
+            (self.GOOD + "| Open Spatial Demographic Data and Research | none |\n", c[3]),
+            (self.GOOD.replace("Derived search terms: theatre, serious game.", "Terms used."), c[1]),
+            (self.GOOD.replace("No external source was queried (OpenAlex not queried).", "Done."), c[5]),
+        ]
+        for text, check in cases:
+            self.write(text)
+            self.assertFalse(self.results()[check], check)
+        self.write(self.GOOD)
+        self.assertFalse(self.results("Done.")[c[8]])
+
+    def test_an_external_call_or_a_changed_library_is_caught(self):
+        self.write(self.GOOD)
+        write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.openalex.org/works?search=x")])
+        self.assertFalse(self.results()[self.fx.checks_listed[6]])
+        write_transcript(self.home, self.root, [tool_call("Bash", command="ls")])
+        self.assertTrue(self.results()[self.fx.checks_listed[6]])
+        self.lib.write_bytes(b"changed")
+        self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+    def test_the_fixture_is_skipped_without_the_records_it_expects(self):
+        other = self.work / "other"
+        other.mkdir()
+        lib = make_library(other, ["Something else"])
+
+        class Args:
+            test_library = str(lib)
+        with self.assertRaises(rf.Skip):
+            rf.LiteratureSearch().build(self.work / "z", Args())
+
+
+class LiteratureSearchExternalFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.lib = make_library(self.work, ["One"])
+
+        class Args:
+            test_library = str(self.lib)
+            external = True
+        self.Args = Args
+        self.fx = rf.LiteratureSearchExternal()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", Args())
+
+    def report(self, n=6, dup=False):
+        rows = [f"| Title {i} | Author {i} | {2000 + i} | Journal | 10.1000/abc{i if not (dup and i == 1) else 0} | "
+                f"{'peer-reviewed' if i % 2 else 'grey literature'} | OpenAlex |" for i in range(n)]
+        return "# Report\n\nOpenAlex: 10 hits.\n\n| Title | Authors | Year | Venue | DOI | Type | Source |\n|---|---|---|---|---|---|---|\n" + "\n".join(rows) + "\n"
+
+    def ris(self, n=6):
+        return "\n\n".join(f"TY  - JOUR\nAU  - Surname, Forename\nTI  - Title {i}\nPY  - {2000 + i}\nER  - " for i in range(n)) + "\n"
+
+    def write(self, report, ris):
+        folder = self.root / "outputs" / "literature-search-tidal-inlets-091126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "literature-search-report.md").write_text(report, encoding="utf-8")
+        target = folder / "literature-search-import.ris"
+        if ris is not None:
+            target.write_text(ris, encoding="utf-8")
+        else:
+            target.unlink(missing_ok=True)
+
+    def results(self):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, "", self.fx.before)}
+
+    def test_it_is_skipped_unless_external_is_given(self):
+        class NoExternal(self.Args):
+            external = False
+        with self.assertRaises(rf.Skip):
+            rf.LiteratureSearchExternal().build(self.work / "q", NoExternal())
+
+    def test_a_good_result_passes_and_each_fault_fails_its_check(self):
+        self.write(self.report(), self.ris())
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        c = self.fx.checks_listed
+        cases = [
+            (self.report(n=3), self.ris(n=3), c[2]),
+            (self.report(dup=True), self.ris(), c[3]),
+            (self.report(), self.ris().replace("ER  - ", "", 1), c[4]),
+            (self.report(), self.ris().replace("Surname, Forename", "Forename Surname"), c[4]),
+            (self.report(), self.ris(n=5), c[5]),
+            (self.report().replace("OpenAlex: 10 hits.", "Done."), self.ris(), c[1]),
+        ]
+        for report, ris, check in cases:
+            self.write(report, ris)
+            self.assertFalse(self.results()[check], check)
+        self.write(self.report(), None)
+        self.assertFalse(self.results()[c[4]])
+
+    def test_mailto_and_other_services_are_caught_but_openalex_alone_is_fine(self):
+        self.write(self.report(), self.ris())
+        write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.openalex.org/works?search=x")])
+        results = self.results()
+        self.assertTrue(results[self.fx.checks_listed[6]] and results[self.fx.checks_listed[7]])
+        write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.openalex.org/works?mailto=a@b.c")])
+        self.assertFalse(self.results()[self.fx.checks_listed[6]])
+        write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.crossref.org/works/10.1/x")])
+        self.assertFalse(self.results()[self.fx.checks_listed[7]])
+        write_transcript(self.home, self.root, [tool_call("mcp__exa__web_search_exa", query="x")])
+        self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+
 if __name__ == "__main__":
     unittest.main()

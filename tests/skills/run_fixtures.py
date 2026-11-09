@@ -13,15 +13,17 @@ folder names made from the temporary project path, and removes them afterwards.
 
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
-                                           [--estuary-doc PATH] [--test-library PATH]
-  skill      project-disclosure, analysis-adversary, proofread, citation-check (default: all that can run)
+                                           [--estuary-doc PATH] [--test-library PATH] [--external]
+  skill      project-disclosure, analysis-adversary, proofread, citation-check, literature-search,
+             literature-search-external (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
   --estuary-doc PATH   the source .doc for the proofread fixture (default working_docs/Estuary Notes.doc);
              the fixture needs Microsoft Word and is skipped without it
-  --test-library PATH  the .enl file of the test EndNote library for the citation-check fixture (or set
-             FIXTURE_ENDNOTE_LIBRARY); the fixture is skipped without it
+  --test-library PATH  the .enl file of the test EndNote library for the citation-check and literature-search
+             fixtures (or set FIXTURE_ENDNOTE_LIBRARY); a fixture is skipped without it
+  --external  also run literature-search-external, which sends a query to OpenAlex (skipped otherwise)
   --claude   the claude command (default: the one on PATH)
   --permission-mode  the mode for the sessions (default auto, as in interactive use; a headless session
              started in the default mode cannot get approval for run control or Python commands)
@@ -47,7 +49,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 REPO = Path(__file__).resolve().parents[2]
 CLAUDE_HOME = Path.home() / ".claude"
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -370,6 +372,52 @@ def word_run(script, timeout=180):
         Path(f.name).unlink(missing_ok=True)
 
 
+class TestLibrary:
+    """Shared by the fixtures that read the test EndNote library through a second, read-only server."""
+
+    def locate_library(self, args):
+        lib = getattr(args, "test_library", None) or os.environ.get("FIXTURE_ENDNOTE_LIBRARY")
+        if not lib or not Path(lib).is_file():
+            raise Skip("no test EndNote library (give --test-library or set FIXTURE_ENDNOTE_LIBRARY)")
+        lib = Path(lib).resolve()
+        sdb = lib.with_name(lib.stem + ".Data") / "sdb" / "sdb.eni"
+        if not (REPO / "mcp" / "endnote" / "endnote_server.py").is_file() or not sdb.is_file():
+            raise Skip("the EndNote server or the library database is missing")
+        self.library = lib
+        return lib, sdb
+
+    def write_mcp_config(self, tmp):
+        self.mcp_config = Path(tmp) / "mcp.json"
+        self.mcp_config.write_text(json.dumps({"mcpServers": {"endnote": {
+            "command": sys.executable, "args": [str(REPO / "mcp" / "endnote" / "endnote_server.py")],
+            "env": {"ENDNOTE_LIBRARY_PATH": str(self.library)}}}}), encoding="utf-8")
+
+    def _library_hashes(self):
+        data = self.library.with_name(self.library.stem + ".Data")
+        found = {self.library.name: hashlib.sha1(self.library.read_bytes()).hexdigest()}
+        for f in sorted(data.rglob("*")):
+            if f.is_file():
+                found[f.relative_to(data).as_posix()] = hashlib.sha1(f.read_bytes()).hexdigest()
+        return found
+
+    def extra_args(self, root):
+        return ["--mcp-config", str(self.mcp_config), "--strict-mcp-config"]
+
+    WEB_TOOLS = r'"name":\s*"(?:WebFetch|WebSearch)"|mcp__exa__|Consensus__'
+
+    def external_calls(self, root, hosts, tools=WEB_TOOLS):
+        """Tool calls in the session transcripts that name one of the hosts (a regex) or one of the tools (a regex)."""
+        import glob
+        pattern = re.compile(hosts + ("|" + tools if tools else ""), re.I)
+        found = []
+        for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if '"tool_use"' in line and pattern.search(line):
+                        found.append(line[:160])
+        return found
+
+
 # ---------------------------------------------------------------------------------------------------------
 class Proofread(Fixture):
     name = "proofread"
@@ -482,7 +530,7 @@ class Proofread(Fixture):
 
 
 # ---------------------------------------------------------------------------------------------------------
-class CitationCheck(Fixture):
+class CitationCheck(TestLibrary, Fixture):
     name = "citation-check"
     timeout = 1800
     # (library id, rec-number written in the field, year written in the field or None for the library's year)
@@ -500,14 +548,7 @@ class CitationCheck(Fixture):
     )
 
     def build(self, tmp, args=None):
-        lib = getattr(args, "test_library", None) or os.environ.get("FIXTURE_ENDNOTE_LIBRARY")
-        if not lib or not Path(lib).is_file():
-            raise Skip("no test EndNote library (give --test-library or set FIXTURE_ENDNOTE_LIBRARY)")
-        lib = Path(lib).resolve()
-        server = REPO / "mcp" / "endnote" / "endnote_server.py"
-        sdb = lib.with_name(lib.stem + ".Data") / "sdb" / "sdb.eni"
-        if not server.is_file() or not sdb.is_file():
-            raise Skip("the EndNote server or the library database is missing")
+        lib, sdb = self.locate_library(args)
         import sqlite3
         con = sqlite3.connect("file:" + sdb.as_posix() + "?mode=ro", uri=True)
         records = {}
@@ -518,30 +559,16 @@ class CitationCheck(Fixture):
             # the snapshot in the field repeats the library record exactly, so only the planted faults differ
             records[i] = (row[0], row[1], row[2], row[3] or "", row[4])
         con.close()
-        self.library = lib
         self.records = records
         root = (Path(tmp) / "Paper").resolve()
         root.mkdir()
         self.manuscript = root / "manuscript.docx"
         self._write_docx(self.manuscript)
-        self.mcp_config = Path(tmp) / "mcp.json"
-        self.mcp_config.write_text(json.dumps({"mcpServers": {"endnote": {
-            "command": sys.executable, "args": [str(server)], "env": {"ENDNOTE_LIBRARY_PATH": str(lib)}}}}), encoding="utf-8")
+        self.write_mcp_config(tmp)
         self.root = root
         self.before = tree_hashes(root)
         self.lib_before = self._library_hashes()
         return root
-
-    def _library_hashes(self):
-        data = self.library.with_name(self.library.stem + ".Data")
-        found = {self.library.name: hashlib.sha1(self.library.read_bytes()).hexdigest()}
-        for f in sorted(data.rglob("*")):
-            if f.is_file():
-                found[f.relative_to(data).as_posix()] = hashlib.sha1(f.read_bytes()).hexdigest()
-        return found
-
-    def extra_args(self, root):
-        return ["--mcp-config", str(self.mcp_config), "--strict-mcp-config"]
 
     @staticmethod
     def _field(author, year, title, recnum, display, number="", reftype=12):
@@ -634,7 +661,149 @@ class CitationCheck(Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), CitationCheck())}
+# ---------------------------------------------------------------------------------------------------------
+class LiteratureSearch(TestLibrary, Fixture):
+    """The local half of the skill: the test EndNote library only, with no external source."""
+    name = "literature-search"
+    timeout = 1200
+    WANTED = ["Theatre in Education", "Serious game"]
+    UNRELATED = ["Open Spatial Demographic Data", "AR6 Synthesis"]
+    checks_listed = (
+        "a report literature-search-report.md is saved in an output folder of the task",
+        "the derived search terms are reported",
+        "the two library records that match the question are in the candidate list",
+        "records that cannot match the question are not in the candidate list",
+        "local-PDF availability is reported",
+        "the report says that no external source was queried",
+        "no external call was made",
+        "the library and the project files are unchanged",
+        "the reply reports the run as pending",
+    )
+
+    def build(self, tmp, args=None):
+        lib, sdb = self.locate_library(args)
+        import sqlite3
+        con = sqlite3.connect("file:" + sdb.as_posix() + "?mode=ro", uri=True)
+        titles = {r[0] for r in con.execute("select title from refs")}
+        con.close()
+        missing = [w for w in self.WANTED + self.UNRELATED if not any(w in t for t in titles)]
+        if missing:
+            raise Skip(f"the test library lacks the records this fixture expects: {missing}")
+        root = (Path(tmp) / "Review").resolve()
+        root.mkdir()
+        self.write_mcp_config(tmp)
+        self.root = root
+        self.before = tree_hashes(root)
+        self.lib_before = self._library_hashes()
+        return root
+
+    def prompt(self, root):
+        return ("Use the literature-search skill. Question: which theatre and serious-game approaches are used to engage "
+                "the public? Subject: public-engagement. Sources: the EndNote library only; do not query any external "
+                "source and do not make any web request. No date range. Do not ask me questions. When the skill has "
+                "finished, tell me the path of the report and whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        text = self.result_text(root, "literature-search-report.md")
+        t = text or ""
+        low = t.lower()
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(self.checks_listed[0], text is not None)
+        add(self.checks_listed[1], re.search(r"derived|search terms", t, re.I) is not None and "theatre" in low)
+        add(self.checks_listed[2], all(w in t for w in self.WANTED), f"missing: {[w for w in self.WANTED if w not in t]}")
+        add(self.checks_listed[3], not any(w in t for w in self.UNRELATED),
+            f"present: {[w for w in self.UNRELATED if w in t]}")
+        add(self.checks_listed[4], re.search(r"no (local |linked )?pdf|not linked|none linked|no linked|pdf", low) is not None)
+        add(self.checks_listed[5], re.search(r"(openalex|arxiv|semantic scholar|exa|consensus)[^\n]*"
+                                              r"(not queried|not searched|not used|excluded|skipped|out of scope|not run|"
+                                              r"no external)|no external source|external sources? (were|was) not", low) is not None)
+        external = self.external_calls(root, r"openalex\.org|crossref\.org|arxiv\.org|semanticscholar")
+        add(self.checks_listed[6], not external, f"{len(external)} calls")
+        add(self.checks_listed[7], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
+        add(self.checks_listed[8], "pending" in reply.lower())
+        return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+class LiteratureSearchExternal(TestLibrary, Fixture):
+    """OpenAlex only, with an import list: structure and de-duplication, not content (needs --external)."""
+    name = "literature-search-external"
+    timeout = 1800
+    checks_listed = (
+        "a report literature-search-report.md is saved in an output folder of the task",
+        "the report gives OpenAlex as a source with a hit count",
+        "the candidate list has at least 5 rows, each with a year and labelled peer-reviewed or grey",
+        "no DOI appears twice in the candidate list",
+        "the import list literature-search-import.ris holds well-formed records",
+        "the number of records in the import list equals the number of candidate rows",
+        "no mailto parameter or personal identifier was sent",
+        "no source other than OpenAlex was queried",
+        "the library and the project files are unchanged",
+    )
+
+    def build(self, tmp, args=None):
+        if not getattr(args, "external", False):
+            raise Skip("sends a query to OpenAlex; give --external to run it")
+        lib, sdb = self.locate_library(args)
+        root = (Path(tmp) / "Search").resolve()
+        root.mkdir()
+        self.write_mcp_config(tmp)
+        self.root = root
+        self.before = tree_hashes(root)
+        self.lib_before = self._library_hashes()
+        return root
+
+    def prompt(self, root):
+        return ("Use the literature-search skill. Query: tidal inlet morphodynamics. Subject: tidal-inlets. Sources: the "
+                "EndNote library and OpenAlex only. Result cap: 10 for OpenAlex. No date range. Include the import-ready "
+                "reference list. You may send the query text to OpenAlex, and to no other service; that is my answer to "
+                "the external confirmation, so do not ask again. Do not add a mailto parameter. When the skill has "
+                "finished, tell me the path of the report and whether the run is pending review.")
+
+    @staticmethod
+    def rows(text):
+        """Candidate-list table rows: lines that start with '|' and hold a four-digit year."""
+        return [ln for ln in text.splitlines() if ln.lstrip().startswith("|") and re.search(r"\b(19|20)\d\d\b", ln)]
+
+    def check(self, root, reply, before):
+        text = self.result_text(root, "literature-search-report.md")
+        ris = self.result_text(root, "literature-search-import.ris")
+        t = text or ""
+        rows = self.rows(t)
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(self.checks_listed[0], text is not None)
+        add(self.checks_listed[1], re.search(r"openalex[^\n]*\d+", t, re.I) is not None)
+        labelled = [r for r in rows if re.search(r"peer|grey|gray", r, re.I)]
+        add(self.checks_listed[2], len(rows) >= 5 and len(labelled) == len(rows), f"{len(rows)} rows, {len(labelled)} labelled")
+        dois = []
+        for r in rows:
+            dois += [d.rstrip(".,;|)").lower() for d in re.findall(r"10\.\d{4,9}/[^\s|]+", r)]
+        add(self.checks_listed[3], len(dois) == len(set(dois)), f"{len(dois) - len(set(dois))} repeated")
+        records = [b for b in re.split(r"\n\s*\n", (ris or "").strip()) if b.strip()]
+        wellformed = bool(records) and all(re.search(r"^TY\s+-\s+\S+", b, re.M) and re.search(r"^TI\s+-\s+\S+", b, re.M)
+                                           and re.search(r"^ER\s+-", b, re.M) for b in records)
+        authors_ok = all(re.search(r",", ln) for b in records for ln in b.splitlines() if ln.startswith("AU  -"))
+        add(self.checks_listed[4], wellformed and authors_ok, f"{len(records)} records")
+        add(self.checks_listed[5], len(records) == len(rows), f"{len(records)} records, {len(rows)} rows")
+        sent = self.external_calls(root, r"mailto=", tools="")
+        mail = [s for s in sent if "mailto=" in s.lower()]
+        add(self.checks_listed[6], not mail, f"{len(mail)} calls")
+        others = self.external_calls(root, r"crossref\.org|arxiv\.org|semanticscholar|unpaywall", tools=r"mcp__exa__|Consensus__")
+        add(self.checks_listed[7], not others, f"{len(others)} calls")
+        add(self.checks_listed[8], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
+        return out
+
+
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), CitationCheck(),
+                                      LiteratureSearch(), LiteratureSearchExternal())}
 
 
 def purge(fixture, root, claude):
@@ -684,6 +853,7 @@ def main(argv):
     ap.add_argument("--timeout", type=int, default=None)
     ap.add_argument("--estuary-doc", default=None)
     ap.add_argument("--test-library", default=None)
+    ap.add_argument("--external", action="store_true")
     ap.add_argument("--claude", default=shutil.which("claude") or "claude")
     ap.add_argument("--permission-mode", default="auto")
     ap.add_argument("--out", default=str(REPO / "working_docs" / "skill-runs"))
