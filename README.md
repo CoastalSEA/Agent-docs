@@ -13,7 +13,7 @@ the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section 
 
 ```
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py status | apply | doctor)
-scripts/    project scripts installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py
+scripts/    project scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook
@@ -67,7 +67,7 @@ only Python 3 and no other package. Run it from the repo root with any Python 3 
 (the command for this machine is in `machine.md`):
 
 ```
-python deploy.py [help|init|status|apply|doctor] [--target PATH] [--diff] [--yes]
+python deploy.py [help|init|status|apply|hooks|doctor] [--target PATH] [--diff] [--yes]
 ```
 
 `python deploy.py help` prints these instructions.
@@ -95,7 +95,11 @@ own writing rules and code header format). They are never stored in this repo. `
 5. **New Claude session.** Ask it to quote the `Marker:` line of each file. A missing rules file
    fails silently, and `doctor` cannot test that a session loads the files.
 
-In a Claude session, ask the user before running `init` or `apply`, because both write under
+Optional: `python deploy.py hooks` adds a hook to `~/.claude/settings.json` that blocks `git push` while
+`records/HANDOFF.md` is stale (`scripts/hook_push_check.py`). It uses the interpreter named on the Python
+line of `rules/machine.md` (the Python running `deploy.py` if there is none), so run `init` and `apply` first. It backs up `settings.json` and keeps other settings.
+
+In a Claude session, ask the user before running `init`, `apply` or `hooks`, because both write under
 `~/.claude`. Without a terminal they need `--yes`.
 
 | Task | Terminal | Claude session |

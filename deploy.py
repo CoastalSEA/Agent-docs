@@ -19,6 +19,9 @@ Usage (run from any folder; the repository is the folder that holds this script)
   python deploy.py apply [--yes]        sync repository copies, back up each live file that will
                                         change, copy, then compare again. Asks for confirmation on
                                         a terminal; without a terminal `--yes` is required.
+  python deploy.py hooks [--yes]        add the push-check hook (scripts/hook_push_check.py) to
+                                        <target>/settings.json with the Python of machine.md; backs up the file
+                                        and keeps every other setting; run `apply` first.
   python deploy.py doctor     check the two local user files in <target>/rules: present, marker
                               line found, form filled in, and each absolute path in machine.md
                               exists. Changes nothing; exit 1 on any problem.
@@ -37,7 +40,7 @@ Outputs:
   `init` writes <target>/rules/machine.md and profile.md only when they do not exist. Nothing
   else ever writes them. The blank forms are in claude-md/user-files/.
 Line endings: files that differ only in line endings count as the same and are not copied.
-Not covered yet: agents, hooks, statusline, MCP servers.
+Not covered yet: agents, other hooks, statusline, MCP servers.
 """
 import argparse
 import difflib
@@ -415,6 +418,68 @@ def init(target, yes):
     return 0
 
 
+HOOK_SCRIPT = "hook_push_check.py"
+
+
+def hook_command(target):
+    """The hook command: this Python (the one running deploy.py) and the installed script, with forward slashes."""
+    script = (target / "scripts" / HOOK_SCRIPT).as_posix()
+    return f'"{(machine_python(target) or Path(sys.executable)).as_posix()}" "{script}"'
+
+
+def machine_python(target):
+    """The interpreter named on the Python line of <target>/rules/machine.md, if that file exists.
+
+    It is the path as written there (for uv, the stable launcher), not the resolved sys.executable."""
+    path = target / "rules" / "machine.md"
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("- Python:"):
+            for p in abs_paths(line):
+                cand = resolve(p)
+                if cand.is_file():
+                    return cand
+    return None
+
+
+def hooks(target, yes):
+    """Add the push-check hook to <target>/settings.json, keeping every other setting. Idempotent."""
+    import json
+    path = target / "settings.json"
+    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    groups = cfg.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    command = hook_command(target)
+    for g in groups:
+        for h in g.get("hooks", []):
+            if HOOK_SCRIPT in h.get("command", ""):
+                if h["command"] == command:
+                    print(f"Hook already installed in {path}")
+                    return 0
+                h["command"] = command
+                break
+        else:
+            continue
+        break
+    else:
+        groups.append({"matcher": "Bash", "hooks": [{"type": "command", "command": command}]})
+    print(f"Will set this PreToolUse hook (matcher Bash) in {path}:{chr(10)}  {command}")
+    if not (target / "scripts" / HOOK_SCRIPT).exists():
+        print(f"Note: {HOOK_SCRIPT} is not installed yet. Run `deploy.py apply` as well.")
+    if not yes and not ask("Write it? [y/N] "):
+        print("Nothing written. Re-run with --yes to confirm without a terminal.")
+        return 1
+    if path.exists():
+        keep = target / "backups" / f"hooks-{datetime.now().strftime('%d%m%y-%H%M')}" / "settings.json"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, keep)
+        print(f"Backup: {keep}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, indent=2) + chr(10), encoding="utf-8")
+    print("Written. Start a new session for the hook to load.")
+    return 0
+
+
 def show_help():
     """Print the deployment instructions: the Deployment section of README.md."""
     readme = REPO / "README.md"
@@ -492,7 +557,7 @@ def doctor(target):
 def main(argv):
     ap = argparse.ArgumentParser(prog="deploy.py", description="Deploy the Agent-docs master files.")
     ap.add_argument("command", nargs="?", default="status",
-                    choices=["status", "apply", "init", "doctor", "help"])
+                    choices=["status", "apply", "init", "doctor", "help", "hooks"])
     ap.add_argument("--target", default=str(Path.home() / ".claude"))
     ap.add_argument("--diff", action="store_true")
     ap.add_argument("--yes", action="store_true")
@@ -502,6 +567,8 @@ def main(argv):
         return show_help()
     if a.command == "init":
         return init(target, a.yes)
+    if a.command == "hooks":
+        return hooks(target, a.yes)
     if a.command == "status":
         return 1 if status(target, a.diff)[0] else 0
     if a.command == "apply":

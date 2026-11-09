@@ -12,6 +12,7 @@ Outputs: a unittest report on standard error; exit code 0 if every test passes.
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
 """
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -40,6 +41,7 @@ CHECK = find("check_records.py", "scripts", "claude-md/project-template/records"
 DEPLOY = REPO / "deploy.py"
 ROTATE = find("rotate_records.py", "scripts")
 STATUS = find("wrapup_status.py", "scripts")
+HOOK = find("hook_push_check.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
 
@@ -661,6 +663,103 @@ class Deploy(unittest.TestCase):
         r = self.dep("doctor")
         self.assertEqual(r.returncode, 1)
         self.assertIn("NOT FOUND", r.stdout)
+
+
+class HookPushCheck(Project):
+    """The push hook blocks `git push` (exit 2) only while the handoff is stale."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "records").mkdir()
+        self.work = self.root / "work.txt"
+        self.work.write_text("one", encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "work")
+        self.handoff = self.root / "records" / "HANDOFF.md"
+
+    def times(self, work_age, handoff_age):
+        import time
+        now = time.time()
+        self.handoff.write_text("handoff", encoding="utf-8")
+        self.work.write_text("two", encoding="utf-8")
+        os.utime(self.work, (now - work_age, now - work_age))
+        os.utime(self.handoff, (now - handoff_age, now - handoff_age))
+
+    def hook(self, command, tool="Bash", cwd=None):
+        call = json.dumps({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(cwd or self.root)})
+        return subprocess.run([sys.executable, "-I", str(HOOK)], input=call, capture_output=True, text=True)
+
+    def test_stale_handoff_blocks_a_push(self):
+        self.times(work_age=10, handoff_age=100)
+        r = self.hook("git push origin main")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("checkpoint", r.stderr)
+
+    def test_current_handoff_allows_a_push(self):
+        self.times(work_age=100, handoff_age=10)
+        self.assertEqual(self.hook("git push").returncode, 0)
+
+    def test_other_commands_and_tools_are_not_checked(self):
+        self.times(work_age=10, handoff_age=100)
+        self.assertEqual(self.hook("git commit -m x").returncode, 0)
+        self.assertEqual(self.hook("echo git pushing").returncode, 0)
+        self.assertEqual(self.hook("git push", tool="Read").returncode, 0)
+
+    def test_a_folder_without_records_is_not_checked(self):
+        plain = Path(self.tmp.name) / "plain"
+        plain.mkdir()
+        self.assertEqual(self.hook("git push", cwd=plain).returncode, 0)
+
+    def test_bad_input_fails_open(self):
+        r = subprocess.run([sys.executable, "-I", str(HOOK)], input="not json", capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+
+    def test_version_flag(self):
+        self.assertEqual(run(HOOK, "--version").stdout.strip(), f"hook_push_check.py {version_of(HOOK)}")
+
+
+class DeployHooks(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name) / "claude"
+
+    def dep(self, *args):
+        return run(DEPLOY, *args, "--target", str(self.target))
+
+    def settings(self):
+        return json.loads((self.target / "settings.json").read_text(encoding="utf-8"))
+
+    def test_hooks_merges_keeps_settings_and_is_idempotent(self):
+        self.target.mkdir()
+        (self.target / "settings.json").write_text(json.dumps({"theme": "x"}), encoding="utf-8")
+        self.assertEqual(self.dep("hooks", "--yes").returncode, 0)
+        cfg = self.settings()
+        self.assertEqual(cfg["theme"], "x")
+        groups = cfg["hooks"]["PreToolUse"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["matcher"], "Bash")
+        self.assertIn("hook_push_check.py", groups[0]["hooks"][0]["command"])
+        self.assertTrue(list((self.target / "backups").glob("hooks-*/settings.json")))
+        self.assertIn("already installed", self.dep("hooks", "--yes").stdout)
+        self.assertEqual(len(self.settings()["hooks"]["PreToolUse"]), 1)
+
+    def test_hooks_uses_the_python_named_in_machine_md(self):
+        (self.target / "rules").mkdir(parents=True)
+        fake = Path(self.tmp.name) / "launcher" / "py.exe"
+        fake.parent.mkdir()
+        fake.write_text("x", encoding="utf-8")
+        (self.target / "rules" / "machine.md").write_text(
+            "- Python: Bash `\"" + fake.as_posix() + "\"`. Plain python is not used." + chr(10), encoding="utf-8")
+        self.assertEqual(self.dep("hooks", "--yes").returncode, 0)
+        command = self.settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        self.assertTrue(command.startswith('"' + fake.as_posix() + '"'), command)
+
+    def test_hooks_needs_yes_without_a_terminal(self):
+        r = subprocess.run([sys.executable, "-I", str(DEPLOY), "hooks", "--target", str(self.target)],
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse((self.target / "settings.json").exists())
 
 
 if __name__ == "__main__":
