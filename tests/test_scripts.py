@@ -42,6 +42,8 @@ DEPLOY = REPO / "deploy.py"
 ROTATE = find("rotate_records.py", "scripts")
 STATUS = find("wrapup_status.py", "scripts")
 HOOK = find("hook_push_check.py", "scripts")
+GUARD = find("hook_guard.py", "scripts")
+CONFIRM = find("hook_confirm.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
 
@@ -718,6 +720,152 @@ class HookPushCheck(Project):
         self.assertEqual(run(HOOK, "--version").stdout.strip(), f"hook_push_check.py {version_of(HOOK)}")
 
 
+class HookGuard(Project):
+    """hook_guard.py blocks writes to data/ and to listed paths, and nothing else."""
+
+    def hook(self, tool, cwd=None, **args):
+        call = json.dumps({"tool_name": tool, "tool_input": args, "cwd": str(cwd or self.root)})
+        return subprocess.run([sys.executable, "-I", str(GUARD)], input=call, capture_output=True, text=True)
+
+    def blocked(self, tool, **args):
+        return self.hook(tool, **args).returncode == 2
+
+    def test_version_flag(self):
+        self.assertEqual(run(GUARD, "--version").stdout.strip(), f"hook_guard.py {version_of(GUARD)}")
+
+    def test_file_tools_are_blocked_under_data(self):
+        for tool in ("Write", "Edit", "MultiEdit"):
+            self.assertTrue(self.blocked(tool, file_path=str(self.root / "data" / "a.csv")), tool)
+        self.assertTrue(self.blocked("Write", file_path="data/sub/b.csv"))
+        self.assertTrue(self.blocked("NotebookEdit", notebook_path=str(self.root / "data" / "n.ipynb")))
+
+    def test_file_tools_elsewhere_and_exempt_files_are_allowed(self):
+        self.assertFalse(self.blocked("Write", file_path=str(self.root / "outputs" / "demo" / "a.csv")))
+        self.assertFalse(self.blocked("Write", file_path=str(self.root / "code" / "data" / "x.py")))
+        self.assertFalse(self.blocked("Write", file_path=str(self.root / "data" / "DATA-NOTES.md")))
+        self.assertFalse(self.blocked("Write", file_path=str(self.root / "data" / "sub" / "README.md")))
+        self.assertTrue(self.blocked("Write", file_path=str(self.root / "data" / "sub" / "DATA-NOTES.md")))
+        self.assertFalse(self.blocked("Read", file_path=str(self.root / "data" / "a.csv")))
+
+    def test_bash_writes_to_data_are_blocked(self):
+        for cmd in ("echo x > data/a.csv", "echo x >> data/a.csv", "rm data/a.csv", "rm -rf ./data",
+                    "mv data/a.csv outputs/", "sed -i s/a/b/ data/a.csv", "cp outputs/x.csv data/a.csv",
+                    "ls; rm data/a.csv", 'Set-Content -Path "data/a.csv" -Value x', "tee data/a.csv"):
+            self.assertTrue(self.blocked("Bash", command=cmd), cmd)
+        self.assertTrue(self.blocked("Bash", command=f"rm {self.root.as_posix()}/data/a.csv"))
+        self.assertTrue(self.blocked("Bash", command="rm " + str(self.root / "data" / "a.csv")))
+
+    def test_bash_reads_and_other_folders_are_allowed(self):
+        for cmd in ("cat data/a.csv", "head -3 data/a.csv > outputs/x.txt", "cp data/a.csv outputs/a.csv",
+                    "rm outputs/data/a.csv", "ls data", "git status", "rm -rf build"):
+            self.assertFalse(self.blocked("Bash", command=cmd), cmd)
+
+    def test_listed_paths_are_protected(self):
+        # the config file sits next to the scripts folder: rules/protected-paths.txt
+        scripts = Path(self.tmp.name) / "claude" / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy(GUARD, scripts / "hook_guard.py")
+        (scripts.parent / "rules").mkdir()
+        lib = Path(self.tmp.name) / "lib" / "My.enl"
+        (scripts.parent / "rules" / "protected-paths.txt").write_text(
+            "# library" + chr(10) + lib.parent.as_posix() + chr(10), encoding="utf-8")
+
+        def go(tool, **args):
+            call = json.dumps({"tool_name": tool, "tool_input": args, "cwd": str(self.root)})
+            return subprocess.run([sys.executable, "-I", str(scripts / "hook_guard.py")], input=call,
+                                  capture_output=True, text=True).returncode
+        self.assertEqual(go("Write", file_path=str(lib)), 2)
+        self.assertEqual(go("Bash", command=f"rm {lib.as_posix()}"), 2)
+        self.assertEqual(go("Bash", command=f"cat {lib.as_posix()}"), 0)
+        self.assertEqual(go("Write", file_path=str(self.root / "x.txt")), 0)
+
+    def test_the_off_switch_and_bad_input_fail_open(self):
+        call = json.dumps({"tool_name": "Write", "tool_input": {"file_path": "data/a.csv"}, "cwd": str(self.root)})
+        env = dict(os.environ, CLAUDE_HOOK_GUARD="off")
+        r = subprocess.run([sys.executable, "-I", str(GUARD)], input=call, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0)
+        r = subprocess.run([sys.executable, "-I", str(GUARD)], input="not json", capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+
+
+class HookConfirm(unittest.TestCase):
+    def hook(self, command, tool="Bash"):
+        call = json.dumps({"tool_name": tool, "tool_input": {"command": command}})
+        return subprocess.run([sys.executable, "-I", str(CONFIRM)], input=call, capture_output=True, text=True)
+
+    def asks(self, command, **kw):
+        r = self.hook(command, **kw)
+        self.assertEqual(r.returncode, 0)
+        return bool(r.stdout.strip()) and json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_version_flag(self):
+        self.assertEqual(run(CONFIRM, "--version").stdout.strip(), f"hook_confirm.py {version_of(CONFIRM)}")
+
+    def test_the_users_decisions_ask(self):
+        for cmd in ('python rc/run_control.py accept demo "Q?" --root p', "python run_control.py reject demo",
+                    "python run_control.py --root p discard demo", "python archive_control.py archive demo",
+                    "python archive_control.py restore demo --root p", "ls && python run_control.py accept demo"):
+            self.assertTrue(self.asks(cmd), cmd)
+
+    def test_other_calls_do_not_ask(self):
+        for cmd in ("python run_control.py start demo", "python run_control.py check demo",
+                    "python run_control.py status", "python archive_control.py list", "git status"):
+            self.assertFalse(self.asks(cmd), cmd)
+        self.assertFalse(self.asks("python run_control.py accept demo", tool="Read"))
+
+    def test_bad_input_is_allowed(self):
+        r = subprocess.run([sys.executable, "-I", str(CONFIRM)], input="x", capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
+class RunControlDataCheck(Project):
+    def setUp(self):
+        super().setUp()
+        (self.root / "data").mkdir()
+        self.csv = self.root / "data" / "a.csv"
+        self.csv.write_text("1,2", encoding="utf-8")
+
+    def test_unchanged_data_passes_and_state_is_recorded(self):
+        self.start_and_write()
+        info = (self.root / "outputs" / "demo" / "run_info.txt").read_text(encoding="utf-8")
+        self.assertRegex(info, r"data state at start: 1[|][0-9a-f]{16}[|]\d+")
+        self.assertIn("Data check: pass", self.rc("check", "demo").stdout)
+        self.accept(question="Q?")
+
+    def test_changed_data_fails_check_and_refuses_accept(self):
+        self.start_and_write()
+        self.csv.write_text("1,2,3,4", encoding="utf-8")
+        later = self.csv.stat().st_mtime + 100
+        os.utime(self.csv, (later, later))
+        r = self.rc("check", "demo")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("a.csv", r.stdout)
+        r = self.rc("accept", "demo", "Q?")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("data/ changed", r.stderr)
+        self.assertNotIn(f"demo-{TODAY}-run1", git(self.root, "tag", "-l"))
+
+    def test_data_changed_ok_passes_it(self):
+        self.start_and_write()
+        self.csv.write_text("changed", encoding="utf-8")
+        self.assertEqual(self.rc("accept", "demo", "Q?", "--data-changed-ok").returncode, 0)
+
+    def test_a_removed_file_is_a_change(self):
+        self.start_and_write()
+        self.csv.unlink()
+        self.assertIn("1 files then, 0 now", self.rc("check", "demo").stdout)
+
+    def test_notes_and_readme_changes_are_ignored_and_no_data_folder_is_skipped(self):
+        self.start_and_write()
+        (self.root / "data" / "DATA-NOTES.md").write_text("notes", encoding="utf-8")
+        (self.root / "data" / "README.md").write_text("r", encoding="utf-8")
+        self.assertEqual(self.rc("check", "demo").returncode, 0)
+        shutil.rmtree(self.root / "data")
+        self.start_and_write(task="other")
+        info = (self.root / "outputs" / "other" / "run_info.txt").read_text(encoding="utf-8")
+        self.assertNotIn("data state", info)
+
+
 class DeployHooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -737,12 +885,14 @@ class DeployHooks(unittest.TestCase):
         cfg = self.settings()
         self.assertEqual(cfg["theme"], "x")
         groups = cfg["hooks"]["PreToolUse"]
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0]["matcher"], "Bash")
-        self.assertIn("hook_push_check.py", groups[0]["hooks"][0]["command"])
+        self.assertEqual(len(groups), 3)
+        commands = [g["hooks"][0]["command"] for g in groups]
+        for name in ("hook_push_check.py", "hook_guard.py", "hook_confirm.py"):
+            self.assertEqual(sum(name in c for c in commands), 1, name)
+        self.assertIn("Write", next(g for g in groups if "hook_guard" in g["hooks"][0]["command"])["matcher"])
         self.assertTrue(list((self.target / "backups").glob("hooks-*/settings.json")))
         self.assertIn("already installed", self.dep("hooks", "--yes").stdout)
-        self.assertEqual(len(self.settings()["hooks"]["PreToolUse"]), 1)
+        self.assertEqual(len(self.settings()["hooks"]["PreToolUse"]), 3)
 
     def test_hooks_uses_the_python_named_in_machine_md(self):
         (self.target / "rules").mkdir(parents=True)
@@ -752,8 +902,9 @@ class DeployHooks(unittest.TestCase):
         (self.target / "rules" / "machine.md").write_text(
             "- Python: Bash `\"" + fake.as_posix() + "\"`. Plain python is not used." + chr(10), encoding="utf-8")
         self.assertEqual(self.dep("hooks", "--yes").returncode, 0)
-        command = self.settings()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        self.assertTrue(command.startswith('"' + fake.as_posix() + '"'), command)
+        for g in self.settings()["hooks"]["PreToolUse"]:
+            command = g["hooks"][0]["command"]
+            self.assertTrue(command.startswith('"' + fake.as_posix() + '"'), command)
 
     def test_hooks_needs_yes_without_a_terminal(self):
         r = subprocess.run([sys.executable, "-I", str(DEPLOY), "hooks", "--target", str(self.target)],

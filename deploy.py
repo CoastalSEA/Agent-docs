@@ -19,7 +19,7 @@ Usage (run from any folder; the repository is the folder that holds this script)
   python deploy.py apply [--yes]        sync repository copies, back up each live file that will
                                         change, copy, then compare again. Asks for confirmation on
                                         a terminal; without a terminal `--yes` is required.
-  python deploy.py hooks [--yes]        add the push-check hook (scripts/hook_push_check.py) to
+  python deploy.py hooks [--yes]        add the hooks (scripts/hook_*.py) to
                                         <target>/settings.json with the Python of machine.md; backs up the file
                                         and keeps every other setting; run `apply` first.
   python deploy.py doctor     check the two local user files in <target>/rules: present, marker
@@ -418,13 +418,18 @@ def init(target, yes):
     return 0
 
 
-HOOK_SCRIPT = "hook_push_check.py"
+# (script, matcher) for each PreToolUse hook that `hooks` installs.
+HOOKS = [
+    ("hook_push_check.py", "Bash"),
+    ("hook_guard.py", "Bash|Write|Edit|MultiEdit|NotebookEdit"),
+    ("hook_confirm.py", "Bash"),
+]
 
 
-def hook_command(target):
-    """The hook command: this Python (the one running deploy.py) and the installed script, with forward slashes."""
-    script = (target / "scripts" / HOOK_SCRIPT).as_posix()
-    return f'"{(machine_python(target) or Path(sys.executable)).as_posix()}" "{script}"'
+def hook_command(target, script):
+    """The hook command: the Python of machine.md (else this Python) and the installed script, forward slashes."""
+    path = (target / "scripts" / script).as_posix()
+    return f'"{(machine_python(target) or Path(sys.executable)).as_posix()}" "{path}"'
 
 
 def machine_python(target):
@@ -444,29 +449,32 @@ def machine_python(target):
 
 
 def hooks(target, yes):
-    """Add the push-check hook to <target>/settings.json, keeping every other setting. Idempotent."""
+    """Add the PreToolUse hooks in HOOKS to <target>/settings.json, keeping every other setting. Idempotent."""
     import json
     path = target / "settings.json"
     cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     groups = cfg.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    command = hook_command(target)
-    for g in groups:
-        for h in g.get("hooks", []):
-            if HOOK_SCRIPT in h.get("command", ""):
-                if h["command"] == command:
-                    print(f"Hook already installed in {path}")
-                    return 0
-                h["command"] = command
-                break
-        else:
+    changes = []
+    for script, matcher in HOOKS:
+        command = hook_command(target, script)
+        entries = [h for g in groups for h in g.get("hooks", []) if script in h.get("command", "")]
+        if entries and all(h["command"] == command for h in entries):
             continue
-        break
-    else:
-        groups.append({"matcher": "Bash", "hooks": [{"type": "command", "command": command}]})
-    print(f"Will set this PreToolUse hook (matcher Bash) in {path}:{chr(10)}  {command}")
-    if not (target / "scripts" / HOOK_SCRIPT).exists():
-        print(f"Note: {HOOK_SCRIPT} is not installed yet. Run `deploy.py apply` as well.")
-    if not yes and not ask("Write it? [y/N] "):
+        if entries:
+            for h in entries:
+                h["command"] = command
+        else:
+            groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
+        changes.append((script, matcher, command))
+        if not (target / "scripts" / script).exists():
+            print(f"Note: {script} is not installed yet. Run `deploy.py apply` as well.")
+    if not changes:
+        print(f"Hooks already installed in {path}")
+        return 0
+    print(f"Will set these PreToolUse hooks in {path}:")
+    for script, matcher, command in changes:
+        print(f"  {script} (matcher {matcher}): {command}")
+    if not yes and not ask("Write them? [y/N] "):
         print("Nothing written. Re-run with --yes to confirm without a terminal.")
         return 1
     if path.exists():
@@ -476,7 +484,7 @@ def hooks(target, yes):
         print(f"Backup: {keep}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2) + chr(10), encoding="utf-8")
-    print("Written. Start a new session for the hook to load.")
+    print("Written. Start a new session for the hooks to load.")
     return 0
 
 

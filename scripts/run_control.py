@@ -37,6 +37,12 @@ File guard (check, accept, reject, status), over the task folder and its subfold
   passes a named file; allowed files are listed in the tag message. Downloaded sources belong
   in the git-ignored sources/ folder, not in outputs/.
 
+Data check (check, accept, reject): `start` records the state of data/ (file names, sizes and times, not
+DATA-NOTES.md or README files) in run_info.txt. If data/ differs later, `check` fails and `accept` and
+`reject` refuse, because input data must not change during a run. The files changed after the start are
+named; deleted files are counted only. --data-changed-ok on accept or reject passes it after the user
+has reviewed the change. Runs started by an earlier version have no record and are not checked.
+
 Use the command line from any language. The root defaults to the current directory; a copy imported
 from <project>/code/ defaults to <project>. Task names are reduced to letters, digits, '-' and '_'.
 
@@ -57,16 +63,19 @@ Modified using: Claude Sonnet-v5.5-date: 290926 (check resolves the latest run f
                 folder mode)
 Modified using: claude-sonnet-5-5-v5.5-date: 081126 (version 1.1: --root accepted anywhere in the command line,
                 including accept/reject without a question)
+Modified using: claude-sonnet-5-5-v5.5-date: 091126 (version 1.2: data check)
 """
 
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {".pdf", ".docx", ".pptx", ".zip", ".7z", ".rar", ".gz", ".pyc"}
 IMAGES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp"}
@@ -173,8 +182,52 @@ def start_run(task, root=None):
                         + ", ".join(pending))
     else:
         info.append("git: not a git repository")
+    state = data_state_line(root)
+    if state:
+        info.append(state)
     (out / "run_info.txt").write_text("\n".join(info) + "\n", encoding="utf-8")
     return out
+
+
+DATA_EXEMPT = ("DATA-NOTES.md", "README")
+
+
+def data_files(root):
+    """{relative path: (size, mtime_ns)} for the files under data/, or None if there is no data/ folder."""
+    data = root / "data"
+    if not data.is_dir():
+        return None
+    found = {}
+    for f in sorted(data.rglob("*")):
+        if f.is_file() and not f.name.startswith(DATA_EXEMPT):
+            s = f.stat()
+            found[f.relative_to(root).as_posix()] = (s.st_size, s.st_mtime_ns)
+    return found
+
+
+def data_digest(files):
+    return hashlib.sha1(repr(sorted(files.items())).encode("utf-8")).hexdigest()[:16]
+
+
+def data_state_line(root):
+    files = data_files(root)
+    if files is None:
+        return None
+    return f"data state at start: {len(files)}|{data_digest(files)}|{time.time_ns()}"
+
+
+def data_change(root, info):
+    """None if data/ is as recorded at start (or nothing was recorded); otherwise a message."""
+    rec = info.get("data state at start")
+    if not rec:
+        return None
+    n, digest, started = rec.split("|")
+    now = data_files(root) or {}
+    if data_digest(now) == digest:
+        return None
+    newer = [name for name, (_, m) in now.items() if m > int(started)]
+    msg = f"data/ changed since the run started ({n} files then, {len(now)} now)"
+    return msg + (": " + ", ".join(newer[:10]) if newer else " (files removed or older files replaced)")
 
 
 def guard(folder, allow=()):
@@ -286,6 +339,8 @@ def cmd_check(task, root, allow):
         print(f"  refused: {x}")
     for x in allowed:
         print(f"  allowed: {x}")
+    changed = data_change(root, read_info(folder)) if (folder / "run_info.txt").exists() else None
+    print(f"Data check: {'FAIL, ' + changed if changed else 'pass'}")
     if tracked_mode(root):
         print("accept would commit:")
         for ln in changes(root, f"outputs/{task}") + (changes(root, "code") if (root / "code").is_dir() else []):
@@ -295,10 +350,10 @@ def cmd_check(task, root, allow):
             print("left uncommitted:")
             for ln in others:
                 print(f"  {ln}")
-    return 1 if problems else 0
+    return 1 if problems or changed else 0
 
 
-def cmd_accept(task, root, question, allow, rejected=False):
+def cmd_accept(task, root, question, allow, rejected=False, data_ok=False):
     task = clean_task(task)
     if not tracked_mode(root):
         print("Run folder mode: there is nothing to accept, reject or discard; the run folder is the record.")
@@ -313,6 +368,11 @@ def cmd_accept(task, root, question, allow, rejected=False):
               f"--allow <file> if the user accepts them:", file=sys.stderr)
         for x in problems:
             print(f"  {x}", file=sys.stderr)
+        return 1
+    changed = data_change(root, read_info(folder))
+    if changed and not data_ok:
+        print(f"{changed}. Input data must not change during a run; nothing was committed. Review the change, "
+              f"then pass --data-changed-ok if the user accepts it.", file=sys.stderr)
         return 1
     tag = read_info(folder).get("proposed tag")
     if not tag:
@@ -420,6 +480,7 @@ def main(argv):
         p.add_argument("task")
         p.add_argument("question", nargs="?")
         p.add_argument("--allow", action="append", default=[])
+        p.add_argument("--data-changed-ok", action="store_true")
     sub.add_parser("status")
     args = ap.parse_args(argv)
     root = Path(root_arg).resolve() if root_arg else Path.cwd()
@@ -430,7 +491,8 @@ def main(argv):
     elif args.cmd == "check":
         return cmd_check(args.task, root, args.allow)
     elif args.cmd in ("accept", "reject"):
-        return cmd_accept(args.task, root, args.question, args.allow, rejected=args.cmd == "reject")
+        return cmd_accept(args.task, root, args.question, args.allow, rejected=args.cmd == "reject",
+                          data_ok=args.data_changed_ok)
     elif args.cmd == "discard":
         return cmd_discard(args.task, root)
     elif args.cmd == "status":

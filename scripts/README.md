@@ -22,6 +22,8 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `wrapup_status.py` | Report whether `records/HANDOFF.md` is current |
 | `rotate_records.py` | Move the oldest decision lines to an archive |
 | `hook_push_check.py` | Claude Code hook: block `git push` while the handoff is stale |
+| `hook_guard.py` | Claude Code hook: block writes to `data/` and to listed protected paths |
+| `hook_confirm.py` | Claude Code hook: ask the user before accept, reject, discard, archive or restore |
 
 ## run_control.py
 
@@ -41,6 +43,7 @@ Prepares and closes the output folder of a task, `outputs/<task>/`. In a git pro
 - Without a question, `accept` and `reject` reuse the question of the last tag of the task.
 - The file guard excludes `.pdf .docx .pptx .zip .7z .rar .gz .pyc` and Office lock files. Images may be up to 1 MB, other files up to 5 MB, and a folder up to 25 MB. `--allow <file>` (repeatable, path relative to the task folder) passes a named file.
 - Task names are reduced to letters, digits, `-` and `_`.
+- Data check: `start` records the state of `data/` (names, sizes and times; not `DATA-NOTES.md` or README files) in `run_info.txt`. If `data/` differs later, `check` fails and `accept` and `reject` refuse, naming the files changed after the start. Deleted files are only counted. `--data-changed-ok` passes it once the user has reviewed the change. Runs without a record are not checked.
 
 Example: `<python> run_control.py start trend-fit --root "<project root>"`
 
@@ -100,5 +103,18 @@ A Claude Code `PreToolUse` hook. It stops `git push` while the handoff is stale,
 
 - It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push`, and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
 - If the handoff is stale or missing, it exits with code 2 and a message. Claude then writes a checkpoint and pushes again. In every other case, and on any error, it exits 0 and the call goes ahead. Commits are not checked.
-- Install it with `python deploy.py hooks` from the repository root. That adds one entry to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hook to load.
+- Install it with `python deploy.py hooks` from the repository root (it installs all three hooks). That adds one entry for each to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hooks to load.
 - Test it by hand: `echo '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"<project root>"}' | <python> hook_push_check.py; echo $?`
+
+## hook_guard.py
+
+A `PreToolUse` hook that blocks writes to protected files with exit code 2 and a message.
+
+- Protected: the project `data/` folder, except `data/DATA-NOTES.md` and README files; and every path in `~/.claude/rules/protected-paths.txt` (one absolute path per line, a file or a folder, `#` for comments; for example the EndNote library file and its `.Data` folder).
+- It checks the target of Write, Edit, MultiEdit and NotebookEdit, and each Bash command segment that names a protected path and redirects into it (`>`, `>>`), uses a writing command (`rm`, `mv`, `sed -i`, `tee`, `del`, `Remove-Item`, `Set-Content`, `Out-File` and similar) or copies onto it. Reading and copying out of a protected folder are allowed.
+- It cannot see a script that writes to a protected path itself. The data check in `run_control.py` reports that afterwards. The hook guards against slips; it is not a lock.
+- Off switch: set the environment variable `CLAUDE_HOOK_GUARD=off` for a session, or delete its entry in `settings.json`. An error in the hook allows the call.
+
+## hook_confirm.py
+
+A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs `run_control.py accept`, `reject` or `discard`, or `archive_control.py archive` or `restore`. These steps commit, tag, delete or restore output folders, and only the user decides them. Other calls are allowed. To cover another step, add a line to the `ASK` list in the script.
