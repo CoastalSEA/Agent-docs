@@ -12,11 +12,11 @@ the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section 
 ## Structure
 
 ```
-deploy.py   copies the master files to the Claude configuration folder (python deploy.py status | apply | doctor)
-scripts/    project scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py
+deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | doctor)
+scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
-hooks/      template prompt for creating a hook
+hooks/      template prompt for creating a hook (the hook scripts that are installed are in scripts/)
 mcp/        one subfolder per MCP server: its code, spec, generator prompt, and reports
 prompts/    prompt and workflow templates not tied to one tool
 records/    the decision log (the handoff file is local and ignored)
@@ -41,11 +41,55 @@ skill, regardless of whether it is deployed at project scope (`.claude/skills/`)
 scope (`~/.claude/skills/`) in a given project. See `skills/skill_location.md` for the
 mechanics of project-level vs. user-level vs. plugin-based deployment.
 
-**Hooks** (`hooks/`): definition files paired with their `.sh` shell script implementations.
+**Hooks**: `hooks/` holds the template prompt for creating a hook. The hook scripts that `deploy.py hooks` registers (`hook_push_check.py`, `hook_guard.py`, `hook_confirm.py`) are in `scripts/`, with their tests.
 
 **Agents, prompts, settings, statusline, claude-md**: each is lower-volume than skills/mcp,
 so no per-item subfolder convention yet — see each folder's own `README.md` for what
 belongs there.
+
+## Wrap-up and records
+
+A project keeps its memory of what was done in files, so a new session (or a new person) can pick up
+the work. The rules are in the global `CLAUDE.md` and the project `CLAUDE.md`; the scripts are in
+`scripts/` and the hooks are optional.
+
+**The record files** (in the project root):
+
+| File | Holds | Kept |
+|---|---|---|
+| `records/HANDOFF.md` | State, open items, next step. Overwritten each time; 3,000 characters or less. | Local, git-ignored |
+| `records/DECISIONS.md` | One row per decision: date, decision, reason, evidence. About 500 characters a row; 100 rows. | In git |
+| `records/DECISIONS-archive.md` | Older decision rows moved out by `rotate_records.py`. Nothing is deleted. | In git |
+| Claude memory notes | Durable facts (decisions, data problems, sources), one per file. Not task status. | Local, `~/.claude/projects/` |
+
+**Three levels of recording:**
+
+1. **Decision line.** Claude adds a row to `DECISIONS.md` when a decision is made, including a decision
+   not to do something, with the reason and the evidence (a commit or a file).
+2. **Checkpoint.** Claude overwrites `HANDOFF.md`: what was decided, what is open, the next step. Do one
+   when a unit of work closes or before a push. Say "checkpoint".
+3. **Wrap-up.** A checkpoint plus the missing decision lines, the `outputs/INDEX.md` update and a memory
+   note for each decision or data problem. Do one at the end of a session. Say "wrap up". `/exit` skips it.
+
+**What is automatic and what is not:**
+
+- Automatic, with the push hook installed (`python deploy.py hooks`): `git push` is blocked while the
+  handoff is stale, so Claude writes a checkpoint first. The hook acts only in a project that has a
+  `records/` folder. Commits are not checked, so mid-task commits need no checkpoint.
+- Not automatic: the checkpoint when you do not push, and the end-of-session wrap-up. Ask for them. Claude
+  also suggests a checkpoint before a commit that closes a piece of work, and a wrap-up at the end of a session.
+- Without the hooks, the rules still apply, but nothing enforces them.
+
+**Checking the state:**
+
+- `wrapup_status.py` reports whether the handoff is current. It is stale when a changed file (uncommitted,
+  or in a commit not yet pushed) is newer than the handoff. It exits 1 when stale or missing.
+- `check_records.py` checks the record files against the project: cited paths exist, run tags and INDEX
+  rows match, memory notes are linked, decision rows are not too long.
+- `rotate_records.py` moves the oldest decision rows to the archive when the log passes 100 rows. It
+  shows what it would move unless `--apply` is given.
+
+Usage of each script, and the commands to run them, are in `scripts/README.md`.
 
 ## Tests
 
@@ -53,7 +97,7 @@ belongs there.
 python -m unittest discover -s tests
 ```
 
-`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`) and `deploy.py` in throwaway projects.
+`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`), the three hook scripts and `deploy.py` in throwaway projects.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
 every script and skill. Neither touches `~/.claude`. `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
@@ -99,7 +143,7 @@ Optional: `python deploy.py hooks` adds three hooks to `~/.claude/settings.json`
 `records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before accept, reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). It uses the interpreter named on the Python
 line of `rules/machine.md` (the Python running `deploy.py` if there is none), so run `init` and `apply` first. It backs up `settings.json` and keeps other settings.
 
-In a Claude session, ask the user before running `init`, `apply` or `hooks`, because both write under
+In a Claude session, ask the user before running `init`, `apply` or `hooks`, because each writes under
 `~/.claude`. Without a terminal they need `--yes`.
 
 | Task | Terminal | Claude session |
@@ -109,6 +153,7 @@ In a Claude session, ask the user before running `init`, `apply` or `hooks`, bec
 | Edit `machine.md` | Yes | Yes, for what `init` could not detect, with assumptions reported |
 | Edit `profile.md` | Yes | Not recommended (your own rules) |
 | `apply` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
+| `hooks` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
 | Confirm that the files load | No | Yes (new session only) |
 
 ### Commands
@@ -119,6 +164,7 @@ In a Claude session, ask the user before running `init`, `apply` or `hooks`, bec
 | `init` | Creates `<target>/rules/machine.md` from values detected on this machine, and `profile.md` as a stub, only for a file that does not exist. Shows the detected values and the text first, then asks `[y/N]` at a terminal. Without a terminal it creates nothing unless `--yes` is given. Never overwrites. | Yes (new files only) |
 | `status` (default) | Lists each master file as `same`, `DIFFERS` or `MISSING` against its live copy. Files that differ only in line endings show as `same*` and are not copied. Lists live skills that are not in the repo, and leaves them alone. Exits 1 if any file would be copied. `--diff` also prints a unified diff for each differing text file. | No |
 | `apply` | Rewrites `claude-md/project-template/CLAUDE.md` from `claude-md/project-CLAUDE.md` (the master), copies each file that differs or is missing, then compares again. Before it replaces a live file it copies that file to `<target>/backups/deploy-<DDMMYY-HHMM>/`. It asks `[y/N]` at a terminal. Without a terminal it copies nothing unless `--yes` is given. | Yes |
+| `hooks` | Adds the three hooks (push check, guard, confirm) to `<target>/settings.json`, using the interpreter named in `machine.md`. Keeps every other setting, backs the file up to `<target>/backups/hooks-<DDMMYY-HHMM>/`, does nothing if the hooks are already there, and asks `[y/N]` at a terminal (`--yes` without one). Run `apply` first so the scripts exist. | Yes (`settings.json`) |
 | `doctor` | Checks `~/.claude/rules/machine.md` and `profile.md`: each file is present, has its `Marker:` line and is filled in, and every absolute path named in `machine.md` exists. Exits 1 on any problem. | No |
 
 `--target PATH` points the script at another configuration folder. Use a scratch folder to
@@ -131,12 +177,14 @@ configuration.
 |---|---|
 | `claude-md/global-CLAUDE.md` | `<target>/CLAUDE.md` |
 | `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`) | `<target>/skills/<name>/` |
-| `scripts/*.py` (the project scripts) | `<target>/scripts/` |
+| `scripts/*.py` (the project scripts and hook scripts) | `<target>/scripts/` |
+| the three hooks in `scripts/hook_*.py` (only the `hooks` command, not `apply`) | an entry in `<target>/settings.json` |
 
 ### What deploy does not install
 
-- **Hooks, agents and the status line.** Copy or register these by hand. They are not
-  covered yet: `hooks/`, `agents/` and `statusline/`.
+- **Other hooks, agents and the status line.** The `hooks` command registers only the three hooks
+  above. Anything else made from the `hooks/` template, the agents in `agents/` and the status line in
+  `statusline/` are copied or registered by hand.
 - **MCP servers.** Register them with `claude mcp add`, pointing at this repo's copy (see
   below).
 - **Project-scope skills.** Skills go to the user scope only (`<target>/skills/`). A skill used in
