@@ -81,7 +81,7 @@ def protected_word(word, root, listed):
         return None
     if re.match(r"^(\./)?data(/|$)", w):
         w = norm(str(root)).rstrip("/") + "/" + re.sub(r"^\./", "", w)
-    elif not re.match(r"^[a-z]:/", w):
+    elif not re.match(r"^([a-z]:)?/", w):
         return None
     return protected_file(w, root, listed)
 
