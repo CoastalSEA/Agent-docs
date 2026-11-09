@@ -28,7 +28,7 @@ Options:
 Inputs:
   claude-md/global-CLAUDE.md              -> <target>/CLAUDE.md
   skills/<name>/ (folders with SKILL.md)  -> <target>/skills/<name>/ (every file except docs/)
-  scripts/*.py                            -> <target>/scripts/ (run_control, archive_control, check_records)
+  scripts/*.py                            -> <target>/scripts/ (the project scripts)
   claude-md/project-CLAUDE.md             -> claude-md/project-template/CLAUDE.md (repository copy,
                                              written by `apply`; the first file is the source)
 Outputs:
@@ -350,8 +350,10 @@ def render_machine(f, scripts, repo, config, today=None):
              "`reject`, `discard` and `status`. For `accept` and `reject` the question follows the task: "
              '`accept <task> "<question>"`.',
              "- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` "
-             "(`archive`, `restore`, `list`) and `check_records.py` (the records check). Use the Python and "
-             "path forms of the run control line, with the script name replaced."]
+             "(`archive`, `restore`, `list`), `check_records.py` (the records check), `wrapup_status.py` "
+             "(whether the handoff is current; exit code 1 if it is stale) and `rotate_records.py` (moves the "
+             "oldest decision lines to the archive; `--apply` writes). Use the Python and path forms of the "
+             "run control line, with the script name replaced."]
     for name, path, on_path, label in f["tools"]:
         where = "on `PATH`" if on_path else "not on `PATH`"
         if name == "MATLAB":

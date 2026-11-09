@@ -13,7 +13,7 @@ the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section 
 
 ```
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py status | apply | doctor)
-scripts/    project scripts installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py
+scripts/    project scripts installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook
@@ -53,7 +53,7 @@ belongs there.
 python -m unittest discover -s tests
 ```
 
-`tests/test_scripts.py` runs `run_control`, `archive_control`, `check_records` and `deploy.py` in throwaway projects.
+`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`) and `deploy.py` in throwaway projects.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
 every script and skill. Neither touches `~/.claude`. `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
@@ -127,7 +127,7 @@ configuration.
 |---|---|
 | `claude-md/global-CLAUDE.md` | `<target>/CLAUDE.md` |
 | `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`) | `<target>/skills/<name>/` |
-| `scripts/*.py` (`run_control`, `archive_control`, `check_records`) | `<target>/scripts/` |
+| `scripts/*.py` (the project scripts) | `<target>/scripts/` |
 
 ### What deploy does not install
 

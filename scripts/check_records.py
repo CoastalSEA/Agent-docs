@@ -35,6 +35,10 @@ Flags (for review, not failures; a legitimate edit also changes a file time):
      changes, so task status belongs in records/HANDOFF.md and not in a note.
   10. uncommitted changes under outputs/ (a run pending review; accept with a commit and tag, or discard).
   11. a file listed in products/PRODUCTS.md that is missing from products/ (the folder is git-ignored; keep a copy elsewhere).
+  12. DECISIONS.md rows longer than 800 characters. The target is an average of 500 or less, which is reported. A row
+      over 1,000 characters dated 091126 or later is a failure; an older one is a flag (the limit is not retroactive).
+  13. DECISIONS.md with more rows than --max-lines (default 100), or more than 60,000 characters: move the oldest rows
+      with rotate_records.py.
 Office lock files (names that start with '~$') are skipped everywhere: they are temporary, not project files.
 The checks find missing items, wording and dates only. A wrong status in INDEX.md, or a stale statement that has no
 status word and cites no changed file, is not detected. Update a status when later work changes what a run means.
@@ -45,6 +49,7 @@ Created using: Sonnet5-v1.0-date: 200926
 (revised by Claude Sonnet-v5.5-date: 141026: paths under archived task folders count as existing; archived rows exempt from
  'run not found'; flag 11 for the products register. Ported from a project copy, 131026)
 (revised by claude-sonnet-5-5-v5.5-date: 081126: moved to scripts/; --root and --version)
+(revised by claude-sonnet-5-5-v5.5-date: 091126: version 1.1, checks 12 and 13 on the size of DECISIONS.md)
 """
 import argparse
 import datetime as dt
@@ -55,9 +60,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
+ROW_WARN, ROW_HARD, ROW_TARGET = 800, 1000, 500  # characters in a DECISIONS.md row
+HARD_FROM = (26, 11, 9)  # (year, month, day): rows dated on or after 091126 must keep to ROW_HARD
+MAX_CHARS = 60000  # characters in DECISIONS.md
+DECISION_ROW = re.compile(r"^\| (\d{2})(\d{2})(\d{2}) \|")
 
-EXT = r"\.(md|txt|csv|py|m|mat|pdf|xlsx?|png|docx?|json|jsonl|html|tex|bib)$"
+EXT =r"\.(md|txt|csv|py|m|mat|pdf|xlsx?|png|docx?|json|jsonl|html|tex|bib)$"
 SKIP_DIRS = {".git", "__pycache__", "node_modules"}
 RUN_TAG = re.compile(r"^.+-\d{6}-run\d+(-rejected)?$")
 ARCHIVED_RUNS = set()  # first cell of the archived INDEX.md rows (a legacy folder has no tag)
@@ -152,6 +161,7 @@ def main():
     ap.add_argument("root", nargs="?", default=".")
     ap.add_argument("--max", type=int, default=40, help="maximum number of lines listed per flag")
     ap.add_argument("--memory", default=None, help="memory folder (default: derived from the project root)")
+    ap.add_argument("--max-lines", type=int, default=100, help="rows allowed in DECISIONS.md before it should be rotated")
     args = ap.parse_args(argv)
     root = Path(root_arg or args.root).resolve()
     rec = record_files(root)
@@ -378,7 +388,32 @@ def main():
             print(f"     missing: {x}")
         flags += len(gone)
 
-    print(f"Result: {'FAIL' if failures else 'PASS'} ({failures} failures, {flags} flags for review)")
+    # 12 and 13. size of DECISIONS.md
+    if "DECISIONS" in text:
+        rows = []
+        for n, ln in enumerate(text["DECISIONS"].splitlines(), 1):
+            m = DECISION_ROW.match(ln)
+            if m:
+                dd, mm, yy = (int(x) for x in m.groups())
+                rows.append((n, len(ln), (yy, mm, dd)))
+        if rows:
+            avg = sum(r[1] for r in rows) // len(rows)
+            long_rows = [r for r in rows if r[1] > ROW_WARN]
+            hard = [r for r in long_rows if r[1] > ROW_HARD and r[2] >= HARD_FROM]
+            soft = [r for r in long_rows if r not in hard]
+            print(f"12. DECISIONS.md rows: {len(rows)}, average {avg} characters (target {ROW_TARGET} or less); "
+                  f"{len(soft)} flagged over {ROW_WARN}, {len(hard)} failed over {ROW_HARD} (dated 091126 or later)")
+            for n, size, _ in (hard + soft)[:args.max]:
+                print(f"     line {n}: {size} characters" + (" (failure)" if (n, size, _) in hard else ""))
+            failures += len(hard)
+            flags += len(soft)
+            total = len(text["DECISIONS"])
+            over_rows, over_chars = len(rows) > args.max_lines, total > MAX_CHARS
+            print(f"13. DECISIONS.md size: {len(rows)} rows (limit {args.max_lines}), {total} characters (limit {MAX_CHARS})"
+                  + ("; move the oldest rows with rotate_records.py" if over_rows or over_chars else ""))
+            flags += int(over_rows) + int(over_chars)
+
+    print(f"Result:{'FAIL' if failures else 'PASS'} ({failures} failures, {flags} flags for review)")
     return 1 if failures else 0
 
 

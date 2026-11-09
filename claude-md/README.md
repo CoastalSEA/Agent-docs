@@ -20,12 +20,13 @@ separately, since they serve different purposes.
   - `.gitignore`: ignores `sources/` (downloaded sources, with references in `sources/references/`), Office lock files and Python caches.
     Merge it into the project's own `.gitignore`.
   - `products/PRODUCTS.md`: register of large generated files (over the file guard limit, videos, intermediates) held in the git-ignored `products/` folder. The `.gitignore` tracks only the register.
-  - The scripts are not copied into projects. `run_control.py`, `archive_control.py` and `check_records.py` live in
-    `scripts/`; `deploy.py` installs them as `~/.claude/scripts/` and the command form is in `machine.md`. Each has `--version`.
-    `run_control` prepares `outputs/<task>/` (`start`), does the git steps and `INDEX.md` lines (`accept`, `reject`, `discard`)
-    and applies the file guard (`check`, `status`); its version is written to `run_info.txt` and the tag message.
-    `archive_control` removes a task folder from `outputs/` and keeps it under the tag `archive-<task>-<DDMMYY>` (INDEX status
-    archived). `check_records` checks the three record files and the memory notes against the project folders at wrap-up.
+  - The scripts are not copied into projects. They live in `scripts/`; `deploy.py` installs them as `~/.claude/scripts/` and the
+    command form is in `machine.md`. Each has `--version`. `run_control` prepares `outputs/<task>/` (`start`), does the git steps and
+    `INDEX.md` lines (`accept`, `reject`, `discard`) and applies the file guard (`check`, `status`); its version is written to
+    `run_info.txt` and the tag message. `archive_control` removes a task folder from `outputs/` and keeps it under the tag
+    `archive-<task>-<DDMMYY>` (INDEX status archived). `check_records` checks the record files and the memory notes against the
+    project folders, including the size of `DECISIONS.md`. `wrapup_status` reports whether the handoff is current (exit code 1 if
+    stale). `rotate_records` moves the oldest decision rows beyond 100 to `records/DECISIONS-archive.md`; nothing is deleted.
 - `project-template-minimal/`: `CLAUDE.md` only, for a small task. It says what the project is and where the data and
   outputs go. The global file supplies the rules. No record files.
 - `project-template-handoff/`: `CLAUDE.md` and `records/HANDOFF.md`. The cheapest record. Use it when a project spans

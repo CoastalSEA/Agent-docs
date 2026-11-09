@@ -32,9 +32,9 @@ Pointers only. What persists between sessions:
 
 ## Working rules for this project
 
-- **Search first.** Before any check, test, or data question, search `data/DATA-NOTES.md`, `records/DECISIONS.md`, `outputs/INDEX.md`, `records/HANDOFF.md`, and the memory folder; cite what you find.
-- **Keep the records current.** The run control `accept` and `reject` add the `INDEX.md` line and mark the superseded run; edit a status by hand only when later work changes what a run means. A pending (uncommitted) run gets no line until it is accepted. Add a line to `DECISIONS.md` for every decision, with reason and evidence file.
-- **Wrap up.** When the user says "wrap up", overwrite `records/HANDOFF.md`: what was decided, what is open, next step. Keep it short. Add missing lines to `DECISIONS.md` and `INDEX.md`; update changed memory notes. Check handoff against those files and report what changed. `/exit` skips this rule.
+- **Search first.** Before any check, test, or data question, search `data/DATA-NOTES.md`, `records/DECISIONS.md` and `records/DECISIONS-archive.md` (if it exists), `outputs/INDEX.md`, `records/HANDOFF.md`, and the memory folder; cite what you find.
+- **Keep the records current.** The run control `accept` and `reject` add the `INDEX.md` line and mark the superseded run; edit a status by hand only when later work changes what a run means. A pending (uncommitted) run gets no line until it is accepted. Add a line to `DECISIONS.md` for every decision when it is made, with reason and evidence file. Keep a line to about 500 characters; detail goes in the commit message or run record.
+- **Checkpoint and wrap up.** A checkpoint overwrites `records/HANDOFF.md` (3,000 characters or less): what was decided, what is open, next step. Do one when a unit of work closes or before a push. A wrap-up is a checkpoint plus the missing lines in `DECISIONS.md` and `INDEX.md`, changed memory notes, and a check of the handoff against those files. Do one at the end of a session. `wrapup_status.py` (in `machine.md`) shows whether the handoff is current. Report what changed. `/exit` skips this rule.
 - **Check the records at wrap-up.** Before reporting wrap-up done, run the run control `status` and `check_records.py` (both in `machine.md`) from project root. Report pending runs and file guard failures. Fix or flag each failure:
   - All paths cited in `DATA-NOTES.md`, `DECISIONS.md`, `INDEX.md` exist; session log citations point to messages.
   - Every run tag has one line in `INDEX.md`; every line names an existing tag or legacy run folder; every folder in `outputs/` appears in `INDEX.md`.
@@ -45,6 +45,7 @@ Pointers only. What persists between sessions:
   - Every memory note is listed in `MEMORY.md`; every link resolves.
   - Flag: memory note containing status word (awaiting, pending, not yet, draft), missing path, or file modified after note date (review and correct or delete).
   - Flag: file listed in `products/PRODUCTS.md` that is missing from `products/`.
+  - Flag: `DECISIONS.md` row over 800 characters, or more than 100 rows or 60,000 characters. Fail: a row over 1,000 characters dated 091126 or later. Move the oldest rows with `rotate_records.py`.
   
   Report counts and flags in wrap-up. Note: check cannot detect wrong status in `INDEX.md`—update manually when work changes what a run means.
 - **Subagents.** Include the search-first rule and pointers above in every subagent prompt.

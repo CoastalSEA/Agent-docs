@@ -38,6 +38,10 @@ RUN_CONTROL = find("run_control.py", "scripts")
 ARCHIVE = find("archive_control.py", "scripts", "claude-md/project-template/code")
 CHECK = find("check_records.py", "scripts", "claude-md/project-template/records")
 DEPLOY = REPO / "deploy.py"
+ROTATE = find("rotate_records.py", "scripts")
+STATUS = find("wrapup_status.py", "scripts")
+NL = chr(10)
+CRLF = chr(13) + chr(10)
 
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -373,6 +377,209 @@ class CheckRecords(Project):
         r = self.check()
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("pending", r.stdout.lower())
+
+
+def decision_rows(first, last, size=60):
+    """Decision-log rows numbered first to last (the number is the six-digit date field)."""
+    return [f"| {i:06d} | decision {i} " + "x" * size + " | reason | evidence |" for i in range(first, last + 1)]
+
+
+class RotateRecords(Project):
+    HEAD = ["# Decisions", "", "Header text.", "", "| Date | Decision | Reason | Evidence |", "|---|---|---|---|"]
+
+    def write_log(self, rows, nl=NL):
+        (self.root / "records").mkdir(exist_ok=True)
+        text = nl.join(self.HEAD + rows) + nl
+        with open(self.root / "records" / "DECISIONS.md", "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+
+    def rows(self, name):
+        text = (self.root / "records" / name).read_text(encoding="utf-8")
+        return [ln for ln in text.splitlines() if ln.startswith("| 0")]
+
+    def rot(self, *args):
+        return run(ROTATE, "--root", str(self.root), *args)
+
+    def test_version_flag(self):
+        self.assertEqual(run(ROTATE, "--version").stdout.strip(), f"rotate_records.py {version_of(ROTATE)}")
+
+    def test_dry_run_changes_nothing(self):
+        self.write_log(decision_rows(1, 120))
+        before = (self.root / "records" / "DECISIONS.md").read_bytes()
+        r = self.rot()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Moving 20 rows", r.stdout)
+        self.assertEqual((self.root / "records" / "DECISIONS.md").read_bytes(), before)
+        self.assertFalse((self.root / "records" / "DECISIONS-archive.md").exists())
+
+    def test_apply_moves_the_oldest_rows_and_loses_none(self):
+        original = decision_rows(1, 120)
+        self.write_log(original)
+        self.assertEqual(self.rot("--apply").returncode, 0)
+        self.assertEqual(self.rows("DECISIONS.md"), original[20:])
+        self.assertEqual(self.rows("DECISIONS-archive.md"), original[:20])
+        active = (self.root / "records" / "DECISIONS.md").read_text(encoding="utf-8")
+        self.assertTrue(active.startswith(NL.join(self.HEAD)))
+        self.assertIn("# Decisions archive", (self.root / "records" / "DECISIONS-archive.md").read_text(encoding="utf-8"))
+
+    def test_a_second_run_does_nothing_and_a_later_run_appends_in_order(self):
+        original = decision_rows(1, 120)
+        self.write_log(original)
+        self.rot("--apply")
+        self.assertIn("nothing to move", self.rot("--apply").stdout)
+        more = decision_rows(121, 125)
+        self.write_log(original[20:] + more)
+        self.assertEqual(self.rot("--apply").returncode, 0)
+        self.assertEqual(self.rows("DECISIONS-archive.md"), original[:25])
+        self.assertEqual(len(self.rows("DECISIONS.md")), 100)
+
+    def test_max_lines_option(self):
+        original = decision_rows(1, 30)
+        self.write_log(original)
+        self.rot("--apply", "--max-lines", "10")
+        self.assertEqual(self.rows("DECISIONS.md"), original[20:])
+        self.assertEqual(len(self.rows("DECISIONS-archive.md")), 20)
+
+    def test_line_endings_are_kept(self):
+        self.write_log(decision_rows(1, 105), nl=CRLF)
+        self.rot("--apply")
+        for name in ("DECISIONS.md", "DECISIONS-archive.md"):
+            data = (self.root / "records" / name).read_bytes()
+            self.assertEqual(data.count(CRLF.encode()), data.count(NL.encode()), name)
+
+    def test_missing_log_is_refused(self):
+        r = self.rot()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not found", r.stderr)
+
+
+class WrapupStatus(Project):
+    """The handoff is stale when a changed file is newer than it."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "records").mkdir()
+        self.work = self.root / "work.txt"
+        self.work.write_text("one", encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "work")
+        self.handoff = self.root / "records" / "HANDOFF.md"
+
+    def st(self, *args):
+        return run(STATUS, "--root", str(self.root), *args)
+
+    def times(self, work_age, handoff_age):
+        """Write the work file and the handoff, then set their ages in seconds before now."""
+        import time
+        now = time.time()
+        self.handoff.write_text("handoff", encoding="utf-8")
+        self.work.write_text("two", encoding="utf-8")
+        os.utime(self.work, (now - work_age, now - work_age))
+        os.utime(self.handoff, (now - handoff_age, now - handoff_age))
+
+    def test_version_flag(self):
+        self.assertEqual(run(STATUS, "--version").stdout.strip(), f"wrapup_status.py {version_of(STATUS)}")
+
+    def test_missing_handoff_is_stale(self):
+        r = self.st()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Handoff: missing", r.stdout)
+
+    def test_handoff_written_after_the_changes_is_current(self):
+        self.times(work_age=100, handoff_age=10)
+        r = self.st()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Status: CURRENT", r.stdout)
+
+    def test_a_change_after_the_handoff_makes_it_stale(self):
+        self.times(work_age=10, handoff_age=100)
+        r = self.st()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("work.txt", r.stdout)
+        self.assertIn("STALE", r.stdout)
+
+    def test_an_unpushed_commit_counts_and_a_pushed_one_does_not(self):
+        origin = Path(self.tmp.name) / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, env=GIT_ENV)
+        git(self.root, "remote", "add", "origin", str(origin))
+        git(self.root, "push", "-q", "-u", "origin", "main")
+        self.times(work_age=10, handoff_age=100)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "more work")
+        self.assertEqual(self.st().returncode, 1, "an unpushed commit with a newer file is stale")
+        git(self.root, "push", "-q")
+        self.assertEqual(self.st().returncode, 0, "after the push nothing is changed")
+
+    def test_quiet_prints_only_the_status_line(self):
+        self.times(work_age=100, handoff_age=10)
+        self.assertEqual(self.st("--quiet").stdout.strip().splitlines(), ["Status: CURRENT"])
+
+    def test_counts_decision_lines_added_since_the_last_commit(self):
+        rows = decision_rows(1, 3)
+        (self.root / "records" / "DECISIONS.md").write_text(NL.join(rows[:1]) + NL, encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "log")
+        (self.root / "records" / "DECISIONS.md").write_text(NL.join(rows) + NL, encoding="utf-8")
+        self.times(work_age=100, handoff_age=10)
+        self.assertIn("Decision lines added since the last commit: 2", self.st().stdout)
+
+    def test_a_folder_that_is_not_a_repository(self):
+        plain = Path(self.tmp.name) / "plain"
+        (plain / "records").mkdir(parents=True)
+        self.assertEqual(run(STATUS, "--root", str(plain)).returncode, 1)
+        (plain / "records" / "HANDOFF.md").write_text("x", encoding="utf-8")
+        r = run(STATUS, "--root", str(plain))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Not a git repository", r.stdout)
+
+
+class CheckRecordsSize(CheckRecords):
+    """Checks 12 and 13: the size of DECISIONS.md."""
+
+    def add_rows(self, rows):
+        with (self.root / "records" / "DECISIONS.md").open("a", encoding="utf-8", newline="") as f:
+            f.write(NL.join(rows) + NL)
+
+    def row(self, date, size):
+        return f"| {date} | " + "x" * size + " | reason | evidence |"
+
+    def test_a_row_over_800_is_a_flag_not_a_failure(self):
+        self.add_rows([self.row("101126", 850)])
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"12\. DECISIONS.md rows: 1, average \d+ characters \(target 500 or less\); 1 flagged over 800, 0 failed")
+
+    def test_a_new_row_over_1000_is_a_failure(self):
+        self.add_rows([self.row("091126", 1100)])
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("(failure)", r.stdout)
+
+    def test_an_old_row_over_1000_is_only_a_flag(self):
+        self.add_rows([self.row("080126", 1100), self.row("081126", 1100)])
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("2 flagged over 800, 0 failed", r.stdout)
+
+    def test_too_many_rows_are_flagged_with_the_remedy(self):
+        self.add_rows([self.row("010126", 40) for _ in range(12)])
+        r = run(CHECK, str(self.root), "--memory", str(self.memory), "--max-lines", "10")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("12 rows (limit 10)", r.stdout)
+        self.assertIn("rotate_records.py", r.stdout)
+
+    def test_a_short_log_has_no_size_flags(self):
+        self.add_rows([self.row("010126", 100)])
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("rotate_records.py", r.stdout)
+
+    def test_the_rotation_script_clears_the_row_count_flag(self):
+        self.add_rows([self.row("010126", 40) for _ in range(12)])
+        self.assertEqual(run(ROTATE, "--root", str(self.root), "--apply", "--max-lines", "10").returncode, 0)
+        r = run(CHECK, str(self.root), "--memory", str(self.memory), "--max-lines", "10")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("rotate_records.py", r.stdout)
 
 
 class Deploy(unittest.TestCase):

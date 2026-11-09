@@ -23,6 +23,6 @@ Pointers only. What persists between sessions:
 ## Working rules for this project
 
 - **Search first.** Before any check, test, or data question, search `records/HANDOFF.md` and the memory folder; cite what you find.
-- **Wrap up.** When the user says "wrap up", overwrite `records/HANDOFF.md`: what was decided, what is open, next step. Keep it short. Save each decision or data problem as a memory note. Report what changed. `/exit` skips this rule.
+- **Checkpoint and wrap up.** A checkpoint overwrites `records/HANDOFF.md` (3,000 characters or less): what was decided, what is open, next step. Do one when a unit of work closes or before a push. A wrap-up is a checkpoint plus a memory note for each decision or data problem. Do one at the end of a session. `wrapup_status.py` (in `machine.md`) shows whether the handoff is current. Report what changed. `/exit` skips this rule.
 - **Subagents.** Include the search-first rule and pointers above in every subagent prompt.
 - **Upgrade check.** In the first reply of each session, tell the user if the project has outgrown this level: `data/` holds 3+ files, `outputs/` holds 5+ runs (run tags or run folders), or earlier results aren't found. Offer to move to `project-template/` in the `claude-md/` folder of the Agent-docs repository (location in `machine.md`). Ask before any change. If declined, save a memory note (date, counts); do not raise again unless a count doubles.

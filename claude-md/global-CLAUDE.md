@@ -39,8 +39,8 @@ Each of the two files has a line that starts with `Marker:` near its top. If you
 - Never make assumptions silently. Always report them and where there is a choice prompt for a selection to be made.
 - Do not make pejorative or subjective statements. Only use phrases such as 'bad data', or make 'real world inferences', when there is a clear line of evidence to support such statements.
 - Before repeating a check or test, search the project's records and memory, if it has any, for an earlier result. Cite what is found. Rerun only if the result is stale (the inputs or the method changed since) or the user asks.
-- When the user says "wrap up", carry out the wrap-up rule in the project `CLAUDE.md`. If the project has none, write a short summary of what was decided, what is open and the next step, and ask where to save it.
-- Before a commit that closes a piece of work, suggest a wrap up first (unless one has just been done), so the final decision lines and the handoff go into one commit. Mid-task commits the user asks for do not need this.
+- There are two levels of wrap-up. A checkpoint writes the handoff only. A wrap-up also records the decisions and updates the other records. When the user says "checkpoint" or "wrap up", carry out the matching rule in the project `CLAUDE.md`. If the project has none, write a short summary of what was decided, what is open and the next step, and ask where to save it.
+- Before a commit or push that closes a piece of work, suggest a checkpoint first (unless the handoff is current), so the handoff goes with the work. Suggest a wrap-up at the end of a session. Mid-task commits do not need either.
 
 ## Subagents
 
