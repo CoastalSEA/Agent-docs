@@ -43,6 +43,7 @@ ROTATE = find("rotate_records.py", "scripts")
 STATUS = find("wrapup_status.py", "scripts")
 HOOK = find("hook_push_check.py", "scripts")
 GUARD = find("hook_guard.py", "scripts")
+RETENTION = find("log_retention.py", "scripts")
 CONFIRM = find("hook_confirm.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
@@ -716,6 +717,17 @@ class HookPushCheck(Project):
         r = subprocess.run([sys.executable, "-I", str(HOOK)], input="not json", capture_output=True, text=True)
         self.assertEqual(r.returncode, 0)
 
+    def test_words_inside_quotes_or_a_here_document_are_not_a_push(self):
+        self.times(work_age=10, handoff_age=100)
+        for cmd in ('sed -i "s/old/ask before git push/" notes.md', "echo 'git push' > note.txt",
+                    'git commit -m "explain git push"', "cat <<'EOF' > n.txt" + NL + "run git push now" + NL + "EOF"):
+            self.assertEqual(self.hook(cmd).returncode, 0, cmd)
+
+    def test_a_push_inside_bash_c_or_after_other_commands_is_still_checked(self):
+        self.times(work_age=10, handoff_age=100)
+        for cmd in ('bash -c "git push"', "git add -A && git push", "echo 'x'; git -C . push origin main"):
+            self.assertEqual(self.hook(cmd).returncode, 2, cmd)
+
     def test_version_flag(self):
         self.assertEqual(run(HOOK, "--version").stdout.strip(), f"hook_push_check.py {version_of(HOOK)}")
 
@@ -759,6 +771,24 @@ class HookGuard(Project):
         for cmd in ("cat data/a.csv", "head -3 data/a.csv > outputs/x.txt", "cp data/a.csv outputs/a.csv",
                     "rm outputs/data/a.csv", "ls data", "git status", "rm -rf build"):
             self.assertFalse(self.blocked("Bash", command=cmd), cmd)
+
+    def test_a_cd_moves_the_folder_that_relative_paths_are_read_against(self):
+        other = (Path(self.tmp.name) / "elsewhere").as_posix()
+        here = self.root.as_posix()
+        self.assertFalse(self.blocked("Bash", command=f"cd {other} && echo x > data/a.csv"))
+        self.assertFalse(self.blocked("Bash", command='cd "$SCRATCH" && rm data/a.csv'))
+        self.assertTrue(self.blocked("Bash", command=f"cd {other} && cd {here} && rm data/a.csv"))
+        self.assertTrue(self.blocked("Bash", command=f"cd {other} && rm {here}/data/a.csv"))
+        self.assertTrue(self.blocked("Bash", command="cd . && rm data/a.csv"))
+        self.assertTrue(self.blocked("Bash", command="mkdir x; cd x; cd .. ; rm data/a.csv"))
+
+    def test_text_in_a_here_document_is_not_a_command(self):
+        body = "python - <<'EOF'" + NL + "run('rm data/a.csv')" + NL + "EOF"
+        self.assertFalse(self.blocked("Bash", command=body))
+        target = "cat > data/a.csv <<'EOF'" + NL + "1,2" + NL + "EOF"
+        self.assertTrue(self.blocked("Bash", command=target))
+        after = "cat <<EOF" + NL + "text" + NL + "EOF" + NL + "rm data/a.csv"
+        self.assertTrue(self.blocked("Bash", command=after))
 
     def test_listed_paths_are_protected(self):
         # the config file sits next to the scripts folder: rules/protected-paths.txt
@@ -866,6 +896,89 @@ class RunControlDataCheck(Project):
         self.assertNotIn("data state", info)
 
 
+class LogRetention(unittest.TestCase):
+    """log_retention.py lists the project transcripts that expire within the warning period."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.claude = Path(self.tmp.name) / "claude"
+        self.root = Path(self.tmp.name) / "my proj"
+        self.root.mkdir()
+        key = re.sub(r"[^A-Za-z0-9]", "-", str(self.root.resolve()))
+        self.logs = self.claude / "projects" / key
+        self.logs.mkdir(parents=True)
+
+    def transcript(self, name, age_days):
+        f = self.logs / f"{name}.jsonl"
+        f.write_text("{}", encoding="utf-8")
+        import time
+        when = time.time() - age_days * 86400
+        os.utime(f, (when, when))
+
+    def settings(self, days):
+        (self.claude / "settings.json").write_text(json.dumps({"cleanupPeriodDays": days}), encoding="utf-8")
+
+    def lr(self, *args, stdin=None):
+        return subprocess.run([sys.executable, "-I", str(RETENTION), "--root", str(self.root),
+                               "--claude-dir", str(self.claude), *args],
+                              input=stdin, capture_output=True, text=True)
+
+    def test_version_flag(self):
+        self.assertEqual(run(RETENTION, "--version").stdout.strip(), f"log_retention.py {version_of(RETENTION)}")
+
+    def test_a_transcript_close_to_expiry_is_reported(self):
+        self.settings(30)
+        self.transcript("aaaaaaaa-1111", 20)
+        self.transcript("bbbbbbbb-2222", 2)
+        r = self.lr()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("aaaaaaaa", r.stdout)
+        self.assertNotIn("bbbbbbbb", r.stdout)
+        self.assertIn("due within 14 days: 1", r.stdout)
+
+    def test_no_transcript_due_exits_0(self):
+        self.settings(30)
+        self.transcript("cccccccc", 5)
+        r = self.lr()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("due within 14 days: 0", r.stdout)
+
+    def test_the_period_comes_from_the_settings_and_defaults_to_30(self):
+        self.transcript("dddddddd", 100)
+        self.assertEqual(self.lr().returncode, 1, "no setting: 30 days, so 100 days old is past expiry")
+        self.settings(180)
+        self.assertEqual(self.lr().returncode, 0, "180 days leaves 80")
+        self.assertEqual(self.lr("--days", "110").returncode, 1, "--days overrides the settings")
+
+    def test_list_and_warn_days(self):
+        self.settings(30)
+        self.transcript("eeeeeeee", 5)
+        self.assertNotIn("eeeeeeee", self.lr().stdout)
+        self.assertIn("eeeeeeee", self.lr("--list").stdout)
+        self.assertEqual(self.lr("--warn-days", "40").returncode, 1)
+
+    def test_hook_mode_prints_json_only_when_something_is_due(self):
+        self.settings(30)
+        self.transcript("ffffffff", 25)
+        call = json.dumps({"cwd": str(self.root), "hook_event_name": "SessionStart"})
+        r = subprocess.run([sys.executable, "-I", str(RETENTION), "--hook", "--claude-dir", str(self.claude)],
+                           input=call, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0)
+        reply = json.loads(r.stdout)
+        self.assertIn("expire within 14 days", reply["systemMessage"])
+        self.assertEqual(reply["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.transcript("ffffffff", 1)
+        r = subprocess.run([sys.executable, "-I", str(RETENTION), "--hook", "--claude-dir", str(self.claude)],
+                           input=call, capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_hook_mode_fails_open(self):
+        r = subprocess.run([sys.executable, "-I", str(RETENTION), "--hook", "--claude-dir", str(self.claude)],
+                           input="not json", capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
 class DeployHooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -905,6 +1018,17 @@ class DeployHooks(unittest.TestCase):
         for g in self.settings()["hooks"]["PreToolUse"]:
             command = g["hooks"][0]["command"]
             self.assertTrue(command.startswith('"' + fake.as_posix() + '"'), command)
+
+    def test_the_retention_notice_is_installed_only_when_asked_for(self):
+        self.assertEqual(self.dep("hooks", "--yes").returncode, 0)
+        self.assertNotIn("SessionStart", self.settings()["hooks"])
+        self.assertEqual(self.dep("hooks", "--yes", "--retention-notice").returncode, 0)
+        groups = self.settings()["hooks"]["SessionStart"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["matcher"], "startup")
+        self.assertTrue(groups[0]["hooks"][0]["command"].endswith('log_retention.py" --hook'))
+        self.assertEqual(len(self.settings()["hooks"]["PreToolUse"]), 3)
+        self.assertIn("already installed", self.dep("hooks", "--yes", "--retention-notice").stdout)
 
     def test_hooks_needs_yes_without_a_terminal(self):
         r = subprocess.run([sys.executable, "-I", str(DEPLOY), "hooks", "--target", str(self.target)],

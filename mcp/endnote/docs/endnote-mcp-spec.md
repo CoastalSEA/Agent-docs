@@ -1,6 +1,6 @@
 ---
-Name: endnote-mcp
-Description: MCP server that sources references from an EndNote library, read-only
+name: endnote-mcp
+description: MCP server that sources references from an EndNote library, read-only
 ---
 # MCP server specification: EndNote
 

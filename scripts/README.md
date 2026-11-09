@@ -24,6 +24,7 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `hook_push_check.py` | Claude Code hook: block `git push` while the handoff is stale |
 | `hook_guard.py` | Claude Code hook: block writes to `data/` and to listed protected paths |
 | `hook_confirm.py` | Claude Code hook: ask the user before accept, reject, discard, archive or restore |
+| `log_retention.py` | Report session transcripts of a project that will be deleted soon; optional start-of-session notice |
 
 ## run_control.py
 
@@ -101,7 +102,7 @@ Keeps `records/DECISIONS.md` short by moving its oldest rows to `records/DECISIO
 
 A Claude Code `PreToolUse` hook. It stops `git push` while the handoff is stale, so the handoff goes with the work. It is not run by hand.
 
-- It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push`, and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
+- It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push` (words inside quotes or a here-document are ignored, except after `-c` or `eval`), and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
 - If the handoff is stale or missing, it exits with code 2 and a message. Claude then writes a checkpoint and pushes again. In every other case, and on any error, it exits 0 and the call goes ahead. Commits are not checked.
 - Install it with `python deploy.py hooks` from the repository root (it installs all three hooks). That adds one entry for each to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hooks to load.
 - Test it by hand: `echo '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"<project root>"}' | <python> hook_push_check.py; echo $?`
@@ -112,9 +113,22 @@ A `PreToolUse` hook that blocks writes to protected files with exit code 2 and a
 
 - Protected: the project `data/` folder, except `data/DATA-NOTES.md` and README files; and every path in `~/.claude/rules/protected-paths.txt` (one absolute path per line, a file or a folder, `#` for comments; for example the EndNote library file and its `.Data` folder).
 - It checks the target of Write, Edit, MultiEdit and NotebookEdit, and each Bash command segment that names a protected path and redirects into it (`>`, `>>`), uses a writing command (`rm`, `mv`, `sed -i`, `tee`, `del`, `Remove-Item`, `Set-Content`, `Out-File` and similar) or copies onto it. Reading and copying out of a protected folder are allowed.
+- A `cd` earlier in the command moves the folder that relative paths are read against; a `cd` to a variable makes later relative paths unknown, and they are allowed. Text in a here-document is not read as commands.
 - It cannot see a script that writes to a protected path itself. The data check in `run_control.py` reports that afterwards. The hook guards against slips; it is not a lock.
 - Off switch: set the environment variable `CLAUDE_HOOK_GUARD=off` for a session, or delete its entry in `settings.json`. An error in the hook allows the call.
 
 ## hook_confirm.py
 
 A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs `run_control.py accept`, `reject` or `discard`, or `archive_control.py archive` or `restore`. These steps commit, tag, delete or restore output folders, and only the user decides them. Other calls are allowed. To cover another step, add a line to the `ASK` list in the script.
+
+## log_retention.py
+
+Claude Code deletes session transcripts older than `cleanupPeriodDays` (default 30; this setup uses 180). The `project-disclosure` skill and the log citations in the decision log read those transcripts. This script lists the transcripts of one project that will expire soon.
+
+```
+<python> log_retention.py [--root <project root>] [--warn-days N] [--days N] [--list] [--claude-dir DIR]
+```
+
+- The period comes from `cleanupPeriodDays` in `~/.claude/settings.json`, then the project `.claude/settings.json` and `settings.local.json`; `--days` overrides it. Transcripts are found under `~/.claude/projects/<project key>/`.
+- A transcript is due when fewer than `--warn-days` days remain (default 14). Age is the time the file was last written; the Claude Code documentation says only "older than". Exit code 1 if any transcript is due; `--list` shows every transcript.
+- With `--hook` it is a `SessionStart` hook: it reads the hook JSON, uses its `cwd`, prints nothing when no transcript is due, and otherwise shows the user a message and tells Claude. Install it with `python deploy.py hooks --retention-notice`. It never fails a session.

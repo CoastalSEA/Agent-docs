@@ -17,7 +17,7 @@ Give each command as a complete, copy-ready line for each shell in use. Say whet
 
 - Python: <full path to the interpreter>. Plain `python` works: <yes | no, and why>. `pip` works: <in any environment | only inside a venv>.
 - Run control: `<python command> <scripts folder>/run_control.py <command> <task> --root "<project root>"`. The commands are `start`, `path`, `check`, `accept`, `reject`, `discard` and `status`. For `accept` and `reject` the question follows the task: `accept <task> "<question>"`.
-- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` (`archive`, `restore`, `list`) `check_records.py` (the records check), `wrapup_status.py` (whether the handoff is current; exit code 1 if it is stale) and `rotate_records.py` (moves the oldest decision lines to the archive; `--apply` writes).
+- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` (`archive`, `restore`, `list`) `check_records.py` (the records check), `wrapup_status.py` (whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line) and `rotate_records.py` (moves the oldest decision lines to the archive; `--apply` writes).
 - R: <full path to Rscript, or "not installed">
 - MATLAB: <full path and a non-interactive example, or "not installed">
 - OCR: <full path to Tesseract, installed languages, the OCR venv path, or "not installed">

@@ -8,7 +8,7 @@ or a folder, `#` starts a comment; for example the EndNote library and its .Data
 
 The hook checks two kinds of call:
 - Write, Edit, MultiEdit and NotebookEdit: the target path.
-- Bash: each command segment (split at ; & | and line ends) that names a protected path and either
+- Bash: each command segment (split at ; & | and line ends; a `cd` moves the folder that relative paths are read against) that names a protected path and either
   redirects into it with > or >>, or uses a writing command (rm, mv, sed -i, tee, del, truncate,
   Remove-Item, Move-Item, Set-Content, Add-Content, Out-File, Clear-Content, New-Item), or copies
   onto it (cp, Copy-Item with the protected path as the last word).
@@ -27,6 +27,7 @@ Version: see VERSION; `--version` prints it.
 """
 import json
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -74,32 +75,58 @@ def protected_file(path, root, listed):
     return None
 
 
-def protected_word(word, root, listed):
-    """Does one word of a command name a protected path? Relative words are read against the project root."""
+def protected_word(word, root, listed, base=None):
+    """Does one word of a command name a protected path? Relative words are read against `base`
+    (the folder the command is in; the project root unless an earlier `cd` moved it). base "?" means unknown."""
     w = word.strip("\"'()<>=")
     if not w:
         return None
     if re.match(r"^(\./)?data(/|$)", w):
-        w = norm(str(root)).rstrip("/") + "/" + re.sub(r"^\./", "", w)
+        if base == "?":
+            return None
+        w = (base or norm(str(root)).rstrip("/")) + "/" + re.sub(r"^\./", "", w)
     elif not re.match(r"^([a-z]:)?/", w):
         return None
     return protected_file(w, root, listed)
 
 
+def after_cd(words, base, root):
+    """The folder after a `cd` segment: absolute targets replace it, relative ones add to it, and a
+    target that holds a variable, ~ or a command substitution makes it unknown ("?")."""
+    target = words[1].strip("\"'") if len(words) > 1 else ""
+    if not target or re.search(r"[$~`]", target) or base == "?" and not re.match(r"^([a-z]:)?/", target):
+        return "?"
+    if re.match(r"^([a-z]:)?/", target):
+        return posixpath.normpath(target)
+    return posixpath.normpath((base or norm(str(root)).rstrip("/")) + "/" + target)
+
+
+HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n)(.*?)(\n[ \t]*\3[ \t]*(?:\n|$))", re.S)
+
+
+def strip_heredocs(text):
+    """Drop the body of each here-document: it is text for a command, not a command."""
+    return HEREDOC.sub(lambda m: m.group(1) + m.group(5), text)
+
+
 def bash_problem(command, root, listed):
-    for seg in SEGMENTS.split(norm(command)):
+    base = None
+    for seg in SEGMENTS.split(strip_heredocs(norm(command))):
         words = seg.split()
-        hits = [(w, protected_word(w.lstrip(">"), root, listed)) for w in words]
+        if words and words[0] == "cd":
+            base = after_cd(words, base, root)
+            continue
+        hits = [(w, protected_word(w.lstrip(">"), root, listed, base)) for w in words]
         hits = [(w, why) for w, why in hits if why]
         if not hits:
             continue
         redirect = re.search(r">>?\s*[\"']?(\S+)", seg)
-        if redirect and protected_word(redirect.group(1), root, listed):
-            return protected_word(redirect.group(1), root, listed)
+        if redirect and protected_word(redirect.group(1), root, listed, base):
+            return protected_word(redirect.group(1), root, listed, base)
         if WRITERS.search(seg):
             return hits[0][1]
-        if COPIERS.search(seg) and protected_word(words[-1], root, listed):
-            return protected_word(words[-1], root, listed)
+        if COPIERS.search(seg) and protected_word(words[-1], root, listed, base):
+            return protected_word(words[-1], root, listed, base)
     return None
 
 

@@ -27,3 +27,12 @@ jobs:
           git --version
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Install into a scratch folder (init, apply, hooks, doctor)
+        shell: bash
+        run: |
+          target="${{ runner.temp }}/claude-target"
+          python deploy.py init --yes --target "$target"
+          python deploy.py apply --yes --target "$target"
+          python deploy.py hooks --yes --retention-notice --target "$target"
+          python deploy.py doctor --target "$target"
+          python deploy.py status --target "$target"

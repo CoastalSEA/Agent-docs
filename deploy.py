@@ -19,9 +19,12 @@ Usage (run from any folder; the repository is the folder that holds this script)
   python deploy.py apply [--yes]        sync repository copies, back up each live file that will
                                         change, copy, then compare again. Asks for confirmation on
                                         a terminal; without a terminal `--yes` is required.
-  python deploy.py hooks [--yes]        add the hooks (scripts/hook_*.py) to
+  python deploy.py hooks [--yes] [--retention-notice]
+                                        add the hooks (scripts/hook_*.py) to
                                         <target>/settings.json with the Python of machine.md; backs up the file
                                         and keeps every other setting; run `apply` first.
+                                        --retention-notice also adds a start-of-session notice of
+                                        transcripts that expire soon (scripts/log_retention.py).
   python deploy.py doctor     check the two local user files in <target>/rules: present, marker
                               line found, form filled in, and each absolute path in machine.md
                               exists. Changes nothing; exit 1 on any problem.
@@ -354,7 +357,8 @@ def render_machine(f, scripts, repo, config, today=None):
              '`accept <task> "<question>"`.',
              "- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` "
              "(`archive`, `restore`, `list`), `check_records.py` (the records check), `wrapup_status.py` "
-             "(whether the handoff is current; exit code 1 if it is stale) and `rotate_records.py` (moves the "
+             "(whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line) "
+             "and `rotate_records.py` (moves the "
              "oldest decision lines to the archive; `--apply` writes). Use the Python and path forms of the "
              "run control line, with the script name replaced."]
     for name, path, on_path, label in f["tools"]:
@@ -418,18 +422,22 @@ def init(target, yes):
     return 0
 
 
-# (script, matcher) for each PreToolUse hook that `hooks` installs.
+# (script, event, matcher, arguments) for each hook that `hooks` installs.
 HOOKS = [
-    ("hook_push_check.py", "Bash"),
-    ("hook_guard.py", "Bash|Write|Edit|MultiEdit|NotebookEdit"),
-    ("hook_confirm.py", "Bash"),
+    ("hook_push_check.py", "PreToolUse", "Bash", ""),
+    ("hook_guard.py", "PreToolUse", "Bash|Write|Edit|MultiEdit|NotebookEdit", ""),
+    ("hook_confirm.py", "PreToolUse", "Bash", ""),
+]
+# installed only with `hooks --retention-notice`
+OPTIONAL_HOOKS = [
+    ("log_retention.py", "SessionStart", "startup", " --hook"),
 ]
 
 
-def hook_command(target, script):
+def hook_command(target, script, args=""):
     """The hook command: the Python of machine.md (else this Python) and the installed script, forward slashes."""
     path = (target / "scripts" / script).as_posix()
-    return f'"{(machine_python(target) or Path(sys.executable)).as_posix()}" "{path}"'
+    return f'"{(machine_python(target) or Path(sys.executable)).as_posix()}" "{path}"{args}'
 
 
 def machine_python(target):
@@ -448,15 +456,16 @@ def machine_python(target):
     return None
 
 
-def hooks(target, yes):
-    """Add the PreToolUse hooks in HOOKS to <target>/settings.json, keeping every other setting. Idempotent."""
+def hooks(target, yes, optional=False):
+    """Add the hooks in HOOKS (and OPTIONAL_HOOKS if asked) to <target>/settings.json, keeping every other
+    setting. Idempotent."""
     import json
     path = target / "settings.json"
     cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    groups = cfg.setdefault("hooks", {}).setdefault("PreToolUse", [])
     changes = []
-    for script, matcher in HOOKS:
-        command = hook_command(target, script)
+    for script, event, matcher, args in HOOKS + (OPTIONAL_HOOKS if optional else []):
+        groups = cfg.setdefault("hooks", {}).setdefault(event, [])
+        command = hook_command(target, script, args)
         entries = [h for g in groups for h in g.get("hooks", []) if script in h.get("command", "")]
         if entries and all(h["command"] == command for h in entries):
             continue
@@ -465,15 +474,15 @@ def hooks(target, yes):
                 h["command"] = command
         else:
             groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
-        changes.append((script, matcher, command))
+        changes.append((script, f"{event}, matcher {matcher}", command))
         if not (target / "scripts" / script).exists():
             print(f"Note: {script} is not installed yet. Run `deploy.py apply` as well.")
     if not changes:
         print(f"Hooks already installed in {path}")
         return 0
-    print(f"Will set these PreToolUse hooks in {path}:")
-    for script, matcher, command in changes:
-        print(f"  {script} (matcher {matcher}): {command}")
+    print(f"Will set these hooks in {path}:")
+    for script, where, command in changes:
+        print(f"  {script} ({where}): {command}")
     if not yes and not ask("Write them? [y/N] "):
         print("Nothing written. Re-run with --yes to confirm without a terminal.")
         return 1
@@ -569,6 +578,7 @@ def main(argv):
     ap.add_argument("--target", default=str(Path.home() / ".claude"))
     ap.add_argument("--diff", action="store_true")
     ap.add_argument("--yes", action="store_true")
+    ap.add_argument("--retention-notice", action="store_true")
     a = ap.parse_args(argv)
     target = Path(a.target).expanduser().resolve()
     if a.command == "help":
@@ -576,7 +586,7 @@ def main(argv):
     if a.command == "init":
         return init(target, a.yes)
     if a.command == "hooks":
-        return hooks(target, a.yes)
+        return hooks(target, a.yes, a.retention_notice)
     if a.command == "status":
         return 1 if status(target, a.diff)[0] else 0
     if a.command == "apply":

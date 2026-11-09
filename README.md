@@ -13,7 +13,7 @@ the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section 
 
 ```
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | doctor)
-scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py
+scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook (the hook scripts that are installed are in scripts/)
@@ -97,7 +97,7 @@ Usage of each script, and the commands to run them, are in `scripts/README.md`.
 python -m unittest discover -s tests
 ```
 
-`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`), the three hook scripts and `deploy.py` in throwaway projects.
+`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`), the three hook scripts, `log_retention.py` and `deploy.py` in throwaway projects.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
 every script and skill. Neither touches `~/.claude`. `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
@@ -140,7 +140,7 @@ own writing rules and code header format). They are never stored in this repo. `
    fails silently, and `doctor` cannot test that a session loads the files.
 
 Optional: `python deploy.py hooks` adds three hooks to `~/.claude/settings.json`: block `git push` while
-`records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before accept, reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). It uses the interpreter named on the Python
+`records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before accept, reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). `python deploy.py hooks --retention-notice` also adds a start-of-session notice when session transcripts of the project are about to be deleted (`scripts/log_retention.py`; the retention period is `cleanupPeriodDays` in `settings.json`). It uses the interpreter named on the Python
 line of `rules/machine.md` (the Python running `deploy.py` if there is none), so run `init` and `apply` first. It backs up `settings.json` and keeps other settings.
 
 In a Claude session, ask the user before running `init`, `apply` or `hooks`, because each writes under
@@ -164,7 +164,7 @@ In a Claude session, ask the user before running `init`, `apply` or `hooks`, bec
 | `init` | Creates `<target>/rules/machine.md` from values detected on this machine, and `profile.md` as a stub, only for a file that does not exist. Shows the detected values and the text first, then asks `[y/N]` at a terminal. Without a terminal it creates nothing unless `--yes` is given. Never overwrites. | Yes (new files only) |
 | `status` (default) | Lists each master file as `same`, `DIFFERS` or `MISSING` against its live copy. Files that differ only in line endings show as `same*` and are not copied. Lists live skills that are not in the repo, and leaves them alone. Exits 1 if any file would be copied. `--diff` also prints a unified diff for each differing text file. | No |
 | `apply` | Rewrites `claude-md/project-template/CLAUDE.md` from `claude-md/project-CLAUDE.md` (the master), copies each file that differs or is missing, then compares again. Before it replaces a live file it copies that file to `<target>/backups/deploy-<DDMMYY-HHMM>/`. It asks `[y/N]` at a terminal. Without a terminal it copies nothing unless `--yes` is given. | Yes |
-| `hooks` | Adds the three hooks (push check, guard, confirm) to `<target>/settings.json`, using the interpreter named in `machine.md`. Keeps every other setting, backs the file up to `<target>/backups/hooks-<DDMMYY-HHMM>/`, does nothing if the hooks are already there, and asks `[y/N]` at a terminal (`--yes` without one). Run `apply` first so the scripts exist. | Yes (`settings.json`) |
+| `hooks` | Adds the three hooks (push check, guard, confirm), and with `--retention-notice` the start-of-session retention notice, to `<target>/settings.json`, using the interpreter named in `machine.md`. Keeps every other setting, backs the file up to `<target>/backups/hooks-<DDMMYY-HHMM>/`, does nothing if the hooks are already there, and asks `[y/N]` at a terminal (`--yes` without one). Run `apply` first so the scripts exist. | Yes (`settings.json`) |
 | `doctor` | Checks `~/.claude/rules/machine.md` and `profile.md`: each file is present, has its `Marker:` line and is filled in, and every absolute path named in `machine.md` exists. Exits 1 on any problem. | No |
 
 `--target PATH` points the script at another configuration folder. Use a scratch folder to
@@ -178,7 +178,7 @@ configuration.
 | `claude-md/global-CLAUDE.md` | `<target>/CLAUDE.md` |
 | `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`) | `<target>/skills/<name>/` |
 | `scripts/*.py` (the project scripts and hook scripts) | `<target>/scripts/` |
-| the three hooks in `scripts/hook_*.py` (only the `hooks` command, not `apply`) | an entry in `<target>/settings.json` |
+| the three hooks in `scripts/hook_*.py`, and with `--retention-notice` the `SessionStart` entry for `log_retention.py` (only the `hooks` command, not `apply`) | entries in `<target>/settings.json` |
 
 ### What deploy does not install
 

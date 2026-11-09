@@ -3,7 +3,7 @@ r"""Claude Code PreToolUse hook: stop a `git push` while the handoff is stale.
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
 
 The hook receives the tool call as JSON on standard input. It acts only on Bash commands that contain
-`git push` and only in a project that has a `records/` folder. It runs wrapup_status.py for that
+`git push` (not inside quoted text or a here-document, except after `-c` or `eval`) and only in a project that has a `records/` folder. It runs wrapup_status.py for that
 project. If the handoff is stale or missing, the hook exits with code 2 and a message, which blocks the
 push and tells Claude to write a checkpoint first. Any other case, and any error, lets the call go
 ahead: the hook never blocks because of its own fault.
@@ -21,7 +21,16 @@ import sys
 from pathlib import Path
 
 VERSION = "1.0"
-PUSH = re.compile(r"(^|[;&|(\s])git(\s+-\S+(\s+\S+)?)*\s+push(\s|$)")
+PUSH = re.compile(r"(^|[;&|(\s\"'])git(\s+-\S+(\s+\S+)?)*\s+push([\s\"';&|)]|$)")
+HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n)(.*?)(\n[ \t]*\3[ \t]*(?:\n|$))", re.S)
+# quoted text is not a command, unless it follows `-c` or `eval` (bash -c "git push")
+QUOTED = re.compile(r"(?<!-c )(?<!eval )(\"[^\"]*\"|'[^']*')")
+
+
+def inert_removed(command):
+    """The command without here-document bodies and quoted text, so words inside them are not read as a command."""
+    command = HEREDOC.sub(lambda m: m.group(1) + m.group(5), command)
+    return QUOTED.sub('""', command)
 
 
 def main():
@@ -31,7 +40,7 @@ def main():
     try:
         call = json.load(sys.stdin)
         command = call.get("tool_input", {}).get("command", "")
-        if call.get("tool_name") != "Bash" or not PUSH.search(command):
+        if call.get("tool_name") != "Bash" or not PUSH.search(inert_removed(command)):
             return 0
         root = Path(call.get("cwd") or ".")
         if not (root / "records").is_dir():
