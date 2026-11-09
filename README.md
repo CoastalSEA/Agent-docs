@@ -100,7 +100,7 @@ python -m unittest discover -s tests
 `tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`), the three hook scripts, `log_retention.py` and `deploy.py` in throwaway projects.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
-every script and skill. Neither touches `~/.claude`. `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
+every script and skill. Neither touches `~/.claude`. `tests/test_skill_fixtures.py` tests the skill fixtures without a model; `tests/skills/run_fixtures.py` runs skills on those fixtures with headless Claude Code sessions, by hand (see `tests/skills/README.md`). `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
 for each push to `main`.
 
 ## Deployment
