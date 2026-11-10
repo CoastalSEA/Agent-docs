@@ -2,12 +2,13 @@
 
 Reusable tooling for working with Claude Code across projects: rules (`CLAUDE.md` files and
 project templates), skills, an MCP server, prompt, agent and hook templates, and the scripts
-that control run outputs and check project records. A deploy script installs the shared parts
+that control run outputs, check project records and set up projects. A deploy script installs the shared parts
 into your Claude configuration folder, and two small local files (`machine.md`, `profile.md`)
 hold what differs from one user to the next.
 
 Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux. Licensed under
-the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below.
+the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below. To set up a project,
+see Starting a project, which is in that section.
 
 ## Structure
 
@@ -22,7 +23,7 @@ prompts/    prompt and workflow templates not tied to one tool
 records/    the decision log (the handoff file is local and ignored)
 skills/     one subfolder per skill, each holding a SKILL.md
 statusline/ statusline scripts for Claude Code's terminal status bar
-tests/      tests for the scripts and the shared files
+tests/      tests for the scripts, the shared files and the skill fixtures (usage in tests/README.md)
 ```
 
 ## Conventions
@@ -100,7 +101,7 @@ Usage of each script, and the commands to run them, are in `scripts/README.md`.
 python -m unittest discover -s tests
 ```
 
-`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`, `project`), the three hook scripts, `log_retention.py` and `deploy.py` in throwaway projects.
+`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`, `project`), the three hook scripts, `log_retention.py`, `check_docx_skill.py` and `deploy.py` in throwaway projects. Usage and what each test file covers are in `tests/README.md`.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
 every script and skill. Neither touches `~/.claude`. `tests/test_skill_fixtures.py` tests the skill fixtures without a model; `tests/skills/run_fixtures.py` runs skills on those fixtures with headless Claude Code sessions, by hand (see `tests/skills/README.md`). `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
@@ -159,6 +160,23 @@ In a Claude session, ask the user before running `init`, `apply` or `hooks`, bec
 | `hooks` | Yes (preferred, with the `[y/N]` prompt) | Only after the user agrees |
 | Confirm that the files load | No | Yes (new session only) |
 
+### Starting a project
+
+Each project has its own `CLAUDE.md`, at one of three levels: minimal (`CLAUDE.md` only), handoff (adds a handoff
+file) and full (adds the data notes, the output index, the decision log and a `.gitignore`). Start at minimal;
+`claude-md/README.md` says when to move up. `scripts/project.py` sets a project up (the command forms are in
+`machine.md`; details are in `scripts/README.md`):
+
+1. **Terminal, in the project folder.** Preview the files: `project.py init --level minimal --templates <path to
+   this repository>/claude-md`. This is a dry run and writes nothing.
+2. **Terminal.** Add `--apply` to write them. It adds only what is missing, never overwrites a file, and adds
+   the missing lines to `.gitignore`.
+3. **Editor.** Replace the placeholder sentence in the new `CLAUDE.md` with one or two sentences on what the
+   project is for.
+4. **Claude session.** Start Claude Code from the project root. In the first reply of each session the model runs
+   `project.py status` and tells you when the project has outgrown its level. To move up, run `init` again with
+   `--level handoff` or `--level full`. An existing `CLAUDE.md` is left as it is, and you merge the new one by hand.
+
 ### Commands
 
 | Command | What it does | Writes anything? |
@@ -192,8 +210,9 @@ configuration.
   below).
 - **Project-scope skills.** Skills go to the user scope only (`<target>/skills/`). A skill used in
   one project only is copied into that project's `.claude/skills/` by hand.
-- **Project templates.** The template folders in `claude-md/` are copied into a project by hand.
-  `deploy.py` only keeps the two copies of the project `CLAUDE.md` in step.
+- **Project templates.** `deploy.py` does not copy the template folders in `claude-md/` anywhere. It only
+  keeps the two copies of the project `CLAUDE.md` in step. A project is set up with `scripts/project.py init`
+  (see Starting a project above), or by copying a template folder by hand.
 - **Updates to the two local user files.** Only `init` writes `machine.md` and `profile.md`, and only
   when a file is missing. Nothing updates or overwrites them. The blank forms are in
   `claude-md/user-files/`.
