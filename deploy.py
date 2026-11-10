@@ -2,6 +2,7 @@ r"""Deploy the Agent-docs master files to the Claude configuration folder.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
 Modified using: claude-sonnet-5-5-v5.5-date: 091126 (init and help)
+Modified using: claude-sonnet-5-5-v5.5-date: 101126 (statusline)
 
 Compares the master files in this repository with the live copies in the Claude configuration
 folder, and copies the ones that differ. Creates the two local user files on a new machine.
@@ -25,6 +26,12 @@ Usage (run from any folder; the repository is the folder that holds this script)
                                         and keeps every other setting; run `apply` first.
                                         --retention-notice also adds a start-of-session notice of
                                         transcripts that expire soon (scripts/log_retention.py).
+  python deploy.py statusline [--yes] [--replace-statusline]
+                                        optional, not part of `apply`: copy statusline/statusline-command.sh to
+                                        <target>/statusline-command.sh and set `statusLine` in settings.json
+                                        (needs bash). Asks first, backs up what it replaces, keeps every other
+                                        setting, and replaces a different `statusLine` only if you agree
+                                        (--replace-statusline with --yes, or a terminal answer).
   python deploy.py doctor     check the two local user files in <target>/rules: present, marker
                               line found, form filled in, and each absolute path in machine.md
                               exists. Changes nothing; exit 1 on any problem.
@@ -43,7 +50,7 @@ Outputs:
   `init` writes <target>/rules/machine.md and profile.md only when they do not exist. Nothing
   else ever writes them. The blank forms are in claude-md/user-files/.
 Line endings: files that differ only in line endings count as the same and are not copied.
-Not covered yet: agents, other hooks, statusline, MCP servers.
+Not covered yet: agents, other hooks, MCP servers.
 """
 import argparse
 import difflib
@@ -499,6 +506,80 @@ def hooks(target, yes, optional=False):
     return 0
 
 
+def statusline(target, yes, replace=False):
+    """Copy statusline/statusline-command.sh to <target> and set `statusLine` in <target>/settings.json.
+
+    Optional: not part of `apply`. Asks first, backs up what it replaces, keeps every other setting, and does not
+    replace a different `statusLine` unless the user agrees (a terminal answer, or --replace-statusline with --yes)."""
+    import json
+    src = REPO / "statusline" / "statusline-command.sh"
+    dst = target / "statusline-command.sh"
+    path = target / "settings.json"
+    if shutil.which("bash") is None:
+        print("The status line script needs bash, and bash was not found on the PATH. Nothing written.")
+        return 1
+    if target == (Path.home() / ".claude").resolve():
+        command = "bash ~/.claude/statusline-command.sh"
+    else:
+        command = f'bash "{dst.as_posix()}"'
+    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    current = cfg.get("statusLine")
+    script = state(src, dst)
+    mine = isinstance(current, dict) and "statusline-command.sh" in str(current.get("command", ""))
+    same_setting = isinstance(current, dict) and current.get("type") == "command" and current.get("command") == command
+    if script in ("same", "eol") and same_setting:
+        print(f"Status line already installed: {dst} and statusLine in {path}")
+        return 0
+    steps = []
+    if script in ("missing", "differs"):
+        steps.append(f"{'Copy' if script == 'missing' else 'Replace (after a backup)'} {dst} from {src.relative_to(REPO)}")
+    if not same_setting:
+        if current is None:
+            steps.append(f"Set statusLine in {path} to: {command}")
+        elif mine:
+            steps.append(f"Update statusLine in {path} to: {command}")
+        else:
+            steps.append(f"Replace the different statusLine in {path} ({current}) with: {command}")
+    print("Will do:")
+    for s in steps:
+        print("  " + s)
+    other = current is not None and not mine and not same_setting
+    if other:
+        print("A different statusLine is set. It is replaced only if you agree to that.")
+        if not (replace if yes else ask("Replace the existing statusLine? [y/N] ")):
+            print("The existing statusLine is kept. Only the script is installed." if script in ("missing", "differs")
+                  else "The existing statusLine is kept. Nothing written.")
+            if script not in ("missing", "differs"):
+                return 1
+            steps = [s for s in steps if not s.startswith("Replace the different")]
+            same_setting = True
+    if not yes and not other and not ask("Write them? [y/N] "):
+        print("Nothing written. Re-run with --yes to confirm without a terminal.")
+        return 1
+    keep = target / "backups" / f"statusline-{datetime.now().strftime('%d%m%y-%H%M')}"
+    if script == "differs":
+        keep.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(dst, keep / dst.name)
+        print(f"Backup: {keep / dst.name}")
+    if script in ("missing", "differs"):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        if os.name != "nt":
+            dst.chmod(0o755)
+        print(f"Wrote {dst}")
+    if not same_setting:
+        if path.exists():
+            keep.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, keep / "settings.json")
+            print(f"Backup: {keep / 'settings.json'}")
+        cfg["statusLine"] = {"type": "command", "command": command}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg, indent=2) + chr(10), encoding="utf-8")
+        print(f"Wrote statusLine to {path}")
+    print("Start a new session, or wait for the next message, for the status line to show.")
+    return 0
+
+
 def show_help():
     """Print the deployment instructions: the Deployment section of README.md."""
     readme = REPO / "README.md"
@@ -591,11 +672,12 @@ def docx_skill_rows(target):
 def main(argv):
     ap = argparse.ArgumentParser(prog="deploy.py", description="Deploy the Agent-docs master files.")
     ap.add_argument("command", nargs="?", default="status",
-                    choices=["status", "apply", "init", "doctor", "help", "hooks"])
+                    choices=["status", "apply", "init", "doctor", "help", "hooks", "statusline"])
     ap.add_argument("--target", default=str(Path.home() / ".claude"))
     ap.add_argument("--diff", action="store_true")
     ap.add_argument("--yes", action="store_true")
     ap.add_argument("--retention-notice", action="store_true")
+    ap.add_argument("--replace-statusline", action="store_true")
     a = ap.parse_args(argv)
     target = Path(a.target).expanduser().resolve()
     if a.command == "help":
@@ -604,6 +686,8 @@ def main(argv):
         return init(target, a.yes)
     if a.command == "hooks":
         return hooks(target, a.yes, a.retention_notice)
+    if a.command == "statusline":
+        return statusline(target, a.yes, a.replace_statusline)
     if a.command == "status":
         return 1 if status(target, a.diff)[0] else 0
     if a.command == "apply":

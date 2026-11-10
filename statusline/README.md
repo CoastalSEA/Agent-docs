@@ -1,9 +1,11 @@
 # statusline
 
 Statusline scripts for Claude Code's terminal status bar. Source of truth for
-`~/.claude/statusline-command.sh`, which is deployed to user level. Back up the live
-file to `~/.claude/backups/` before copying, then confirm the two copies are identical
-with `diff`.
+`~/.claude/statusline-command.sh`, which is deployed to user level. Install it with
+`python deploy.py statusline` (optional, not part of `apply`; needs `bash`). The command
+asks first, backs up what it replaces, sets `statusLine` in `settings.json` and keeps every
+other setting. A different `statusLine` is replaced only if you agree. See the Commands
+table in the root README.
 
 ## statusline-command.sh
 

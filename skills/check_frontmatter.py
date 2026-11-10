@@ -16,7 +16,8 @@ Usage:   python skills/check_frontmatter.py skills/<name>/SKILL.md [...]
 Inputs:  the SKILL.md files named on the command line.
 Outputs: one line per file on standard output (OK or FAIL), then up to six problems for a failing file. No file is written.
          A warning line follows a file whose single-line description is over 350 characters (descriptions are loaded in
-         every session); a warning does not change the exit code.
+         every session), and a warning line follows a file that is over 15,000 characters (long instructions are
+         followed less reliably). A warning does not change the exit code.
          Exit code 1 if any file fails or has no frontmatter block, otherwise 0.
 
 Created using: Sonnet5-v1.0-date: 200926
@@ -25,6 +26,7 @@ import re
 import sys
 
 DESCRIPTION_LIMIT = 350
+SIZE_LIMIT = 15000
 
 sys.stdout.reconfigure(encoding="utf-8")
 TOP_KEY = re.compile(r"^([A-Za-z_][\w-]*):(\s|$)(.*)$")
@@ -66,6 +68,11 @@ def description_length(path):
     return len(d.group(1)) if d else None
 
 
+def file_length(path):
+    """Number of characters in the file, with line endings counted as one character."""
+    return len(open(path, encoding="utf-8").read().replace("\r\n", "\n"))
+
+
 def main(paths):
     failed = False
     for path in paths:
@@ -80,6 +87,9 @@ def main(paths):
         n = description_length(path)
         if n is not None and n > DESCRIPTION_LIMIT:
             print(f"    warning: description is {n} characters (limit {DESCRIPTION_LIMIT}); the description is loaded in every session")
+        size = file_length(path)
+        if size > SIZE_LIMIT:
+            print(f"    warning: file is {size:,} characters (flag above {SIZE_LIMIT:,}); long instructions are followed less reliably")
         failed = failed or bool(problems)
     return 1 if failed else 0
 

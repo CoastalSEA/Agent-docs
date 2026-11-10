@@ -13,3 +13,5 @@ draft-refine-deploy process to run it through.
 `check_frontmatter.py` checks that a `SKILL.md` frontmatter will parse (description on one
 line, no `: ` or ` #` in it). Run it on every new or edited skill before deploying. A
 frontmatter that does not parse is ignored silently, and the skill then does not fork.
+It also warns, without failing, when a description is over 350 characters (it is loaded in every session) or a file
+is over 15,000 characters (long instructions are followed less reliably).

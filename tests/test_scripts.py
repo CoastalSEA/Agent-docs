@@ -1358,5 +1358,77 @@ class ProjectScript(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+@unittest.skipIf(shutil.which("bash") is None, "the status line script needs bash")
+class DeployStatusline(unittest.TestCase):
+    SRC = REPO / "statusline" / "statusline-command.sh"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.target = Path(self.tmp.name) / "claude"
+        self.target.mkdir()
+
+    def dep(self, *args, stdin=None):
+        return subprocess.run([sys.executable, "-I", str(DEPLOY), "statusline", *args, "--target", str(self.target)],
+                              capture_output=True, text=True, stdin=stdin if stdin is not None else subprocess.DEVNULL,
+                              env=GIT_ENV)
+
+    def settings(self):
+        return json.loads((self.target / "settings.json").read_text(encoding="utf-8"))
+
+    def test_needs_yes_without_a_terminal_and_writes_nothing(self):
+        r = self.dep()
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse((self.target / "statusline-command.sh").exists())
+        self.assertFalse((self.target / "settings.json").exists())
+
+    def test_installs_the_script_and_the_setting_and_keeps_other_settings(self):
+        (self.target / "settings.json").write_text(json.dumps({"theme": "x"}), encoding="utf-8")
+        r = self.dep("--yes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.target / "statusline-command.sh").read_bytes(), self.SRC.read_bytes())
+        cfg = self.settings()
+        self.assertEqual(cfg["theme"], "x")
+        self.assertEqual(cfg["statusLine"]["type"], "command")
+        self.assertIn("statusline-command.sh", cfg["statusLine"]["command"])
+        self.assertTrue(cfg["statusLine"]["command"].startswith("bash "))
+        self.assertTrue(list((self.target / "backups").glob("statusline-*/settings.json")))
+
+    def test_it_is_idempotent(self):
+        self.dep("--yes")
+        r = self.dep("--yes")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("already installed", r.stdout)
+
+    def test_a_changed_live_script_is_backed_up(self):
+        self.dep("--yes")
+        live = self.target / "statusline-command.sh"
+        live.write_text("#!/bin/bash\necho mine\n", encoding="utf-8")
+        self.assertEqual(self.dep("--yes").returncode, 0)
+        backups = list((self.target / "backups").glob("statusline-*/statusline-command.sh"))
+        self.assertEqual(len(backups), 1)
+        self.assertIn("echo mine", backups[0].read_text(encoding="utf-8"))
+        self.assertEqual(live.read_bytes(), self.SRC.read_bytes())
+
+    def test_a_different_statusline_is_not_replaced_without_agreement(self):
+        other = {"type": "command", "command": "bash ~/other.sh"}
+        (self.target / "settings.json").write_text(json.dumps({"statusLine": other}), encoding="utf-8")
+        r = self.dep("--yes")
+        self.assertEqual(self.settings()["statusLine"], other)
+        self.assertIn("existing statusLine is kept", r.stdout)
+        self.assertEqual((self.target / "statusline-command.sh").read_bytes(), self.SRC.read_bytes())
+        r = self.dep("--yes", "--replace-statusline")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("statusline-command.sh", self.settings()["statusLine"]["command"])
+        saved = list((self.target / "backups").glob("statusline-*/settings.json"))
+        self.assertTrue(saved)
+        self.assertEqual(json.loads(saved[0].read_text(encoding="utf-8"))["statusLine"], other)
+
+    def test_apply_does_not_install_it(self):
+        run(DEPLOY, "apply", "--yes", "--target", str(self.target))
+        self.assertFalse((self.target / "statusline-command.sh").exists())
+        self.assertFalse((self.target / "settings.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

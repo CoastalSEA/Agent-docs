@@ -1,5 +1,7 @@
 # Agent-docs
 
+[![tests](https://github.com/CoastalSEA/Agent-docs/actions/workflows/tests.yml/badge.svg)](https://github.com/CoastalSEA/Agent-docs/actions/workflows/tests.yml)
+
 Reusable tooling for working with Claude Code across projects: rules (`CLAUDE.md` files and
 project templates), skills, an MCP server, prompt, agent and hook templates, and the scripts
 that control run outputs, check project records and set up projects. A deploy script installs the shared parts
@@ -8,12 +10,12 @@ hold what differs from one user to the next.
 
 Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux. Licensed under
 the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below. To set up a project,
-see Starting a project, which is in that section.
+see Starting a project, which is in that section. To contribute, see `CONTRIBUTING.md`.
 
 ## Structure
 
 ```
-deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | doctor)
+deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | statusline | doctor)
 scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
@@ -115,7 +117,7 @@ only Python 3 and no other package. Run it from the repo root with any Python 3 
 (the command for this machine is in `machine.md`):
 
 ```
-python deploy.py [help|init|status|apply|hooks|doctor] [--target PATH] [--diff] [--yes]
+python deploy.py [help|init|status|apply|hooks|statusline|doctor] [--target PATH] [--diff] [--yes]
 ```
 
 `python deploy.py help` prints these instructions.
@@ -186,6 +188,7 @@ file) and full (adds the data notes, the output index, the decision log and a `.
 | `status` (default) | Lists each master file as `same`, `DIFFERS` or `MISSING` against its live copy. Files that differ only in line endings show as `same*` and are not copied. Lists live skills that are not in the repo, and leaves them alone. Exits 1 if any file would be copied. `--diff` also prints a unified diff for each differing text file. | No |
 | `apply` | Rewrites `claude-md/project-template/CLAUDE.md` from `claude-md/project-CLAUDE.md` (the master), copies each file that differs or is missing, then compares again. Before it replaces a live file it copies that file to `<target>/backups/deploy-<DDMMYY-HHMM>/`. It asks `[y/N]` at a terminal. Without a terminal it copies nothing unless `--yes` is given. | Yes |
 | `hooks` | Adds the three hooks (push check, guard, confirm), and with `--retention-notice` the start-of-session retention notice, to `<target>/settings.json`, using the interpreter named in `machine.md`. Keeps every other setting, backs the file up to `<target>/backups/hooks-<DDMMYY-HHMM>/`, does nothing if the hooks are already there, and asks `[y/N]` at a terminal (`--yes` without one). Run `apply` first so the scripts exist. | Yes (`settings.json`) |
+| `statusline` | Optional, and not part of `apply`. Copies `statusline/statusline-command.sh` to `<target>/statusline-command.sh` and sets `statusLine` in `<target>/settings.json` (needs `bash`). Shows what it will do and asks `[y/N]` at a terminal (`--yes` without one). Backs up a live script or `settings.json` that it changes to `<target>/backups/statusline-<DDMMYY-HHMM>/`, keeps every other setting, and does nothing if it is already installed. A different `statusLine` is replaced only if you agree to that separately (a terminal answer, or `--replace-statusline` with `--yes`). | Yes (the script and `settings.json`) |
 | `doctor` | Checks `~/.claude/rules/machine.md` and `profile.md`: each file is present, has its `Marker:` line and is filled in, and every absolute path named in `machine.md` exists. Exits 1 on any problem. It also shows whether the `docx` skill scripts that `proofread` uses are present and unchanged since they were last accepted; that part is a warning and never a problem. | No |
 
 `--target PATH` points the script at another configuration folder. Use a scratch folder to
@@ -200,12 +203,14 @@ configuration.
 | `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`) | `<target>/skills/<name>/` |
 | `scripts/*.py` (the project scripts and hook scripts) | `<target>/scripts/` |
 | the three hooks in `scripts/hook_*.py`, and with `--retention-notice` the `SessionStart` entry for `log_retention.py` (only the `hooks` command, not `apply`) | entries in `<target>/settings.json` |
+| `statusline/statusline-command.sh` (only the `statusline` command, not `apply`) | `<target>/statusline-command.sh`, and the `statusLine` entry in `<target>/settings.json` |
 
 ### What deploy does not install
 
-- **Other hooks, agents and the status line.** The `hooks` command registers only the three hooks
-  above. Anything else made from the `hooks/` template, the agents in `agents/` and the status line in
-  `statusline/` are copied or registered by hand.
+- **Other hooks and agents.** The `hooks` command registers only the three hooks above. Anything else
+  made from the `hooks/` template, and the agents in `agents/`, are copied or registered by hand.
+- **The status line, unless you ask for it.** `apply` does not install it. The `statusline` command does
+  (see Commands).
 - **MCP servers.** Register them with `claude mcp add`, pointing at this repo's copy (see
   below).
 - **Project-scope skills.** Skills go to the user scope only (`<target>/skills/`). A skill used in

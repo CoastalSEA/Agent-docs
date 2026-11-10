@@ -176,7 +176,20 @@ class Skills(unittest.TestCase):
         skills = sorted((REPO / "skills").glob("*/SKILL.md"))
         r = subprocess.run([sys.executable, "-I", str(REPO / "skills" / "check_frontmatter.py"),
                             *map(str, skills)], capture_output=True, text=True)
-        self.assertNotIn("warning", r.stdout)
+        self.assertNotIn("description is", r.stdout)
+
+    def test_a_long_file_gives_a_size_warning_and_not_a_failure(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            long, short = Path(d) / "long.md", Path(d) / "short.md"
+            head = "---\nname: x\ndescription: short\n---\n"
+            long.write_text(head + "word " * 3100, encoding="utf-8")
+            short.write_text(head + "word " * 100, encoding="utf-8")
+            r = subprocess.run([sys.executable, "-I", str(REPO / "skills" / "check_frontmatter.py"), str(long), str(short)],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertEqual(r.stdout.count("warning: file is"), 1, r.stdout)
+            self.assertIn("flag above 15,000", r.stdout)
+            self.assertLess(r.stdout.index("warning"), r.stdout.index("short.md"))
 
     def test_a_long_description_gives_a_warning_and_not_a_failure(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
