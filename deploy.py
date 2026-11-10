@@ -357,9 +357,11 @@ def render_machine(f, scripts, repo, config, today=None):
              '`accept <task> "<question>"`.',
              "- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` "
              "(`archive`, `restore`, `list`), `check_records.py` (the records check), `wrapup_status.py` "
-             "(whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line) "
-             "and `rotate_records.py` (moves the "
-             "oldest decision lines to the archive; `--apply` writes). Use the Python and path forms of the "
+             "(whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line), "
+             "`rotate_records.py` (moves the "
+             "oldest decision lines to the archive; `--apply` writes) and `project.py` (`status` reports the template level "
+             "and whether an upgrade is suggested; `init --level minimal|handoff|full` is a dry run until `--apply`, and `--templates` "
+             "names the `claude-md` folder of this repository). Use the Python and path forms of the "
              "run control line, with the script name replaced. `check_docx_skill.py` takes no `--root`: `--find` prints the folder of the docx skill scripts that the proofread skill calls, and a plain run checks them."]
     for name, path, on_path, label in f["tools"]:
         where = "on `PATH`" if on_path else "not on `PATH`"

@@ -14,8 +14,4 @@ Use global settings for everything else. This project keeps no record files.
 
 ## Working rules for this project
 
-- **Upgrade check.** In the first reply of each session, tell the user if any threshold is met:
-  - Memory folder or outputs show earlier work → move to `project-template-handoff/`
-  - `data/` holds 3+ files or `outputs/` holds 5+ runs (run tags or run folders) → move to `project-template/`
-  
-  Both templates are in the `claude-md/` folder of the Agent-docs repository (location in `machine.md`). Offer the upgrade; ask before any change. If declined, save a memory note (date, counts); do not raise again unless a count doubles.
+- **Upgrade check.** In the first reply of each session, run `project.py status` (in `machine.md`) and tell the user if its last line suggests an upgrade. Offer the move and ask before any change. `project.py init --level <level> --templates <the claude-md folder of the Agent-docs repository>` is a dry run that lists what it would add; `--apply` writes it. If declined, save a memory note (date, counts); do not raise again unless a count doubles.

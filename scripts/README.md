@@ -21,6 +21,7 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `check_records.py` | Check the record files and memory notes against the project |
 | `wrapup_status.py` | Report whether `records/HANDOFF.md` is current |
 | `rotate_records.py` | Move the oldest decision lines to an archive |
+| `project.py` | Report the project template level and add the missing template files |
 | `hook_push_check.py` | Claude Code hook: block `git push` while the handoff is stale |
 | `hook_guard.py` | Claude Code hook: block writes to `data/` and to listed protected paths |
 | `hook_confirm.py` | Claude Code hook: ask the user before accept, reject, discard, archive or restore |
@@ -98,6 +99,22 @@ Keeps `records/DECISIONS.md` short by moving its oldest rows to `records/DECISIO
 - Without `--apply` it prints what it would move and changes nothing. Run that first.
 - `--max-lines` is the number of rows to keep (default 100).
 - Run it again later and the next oldest rows are appended in order.
+
+## project.py
+
+Reports which project template level a project is at (minimal, handoff or full), whether it has outgrown it, and adds the files of a level that are missing. The upgrade check in the minimal and handoff `CLAUDE.md` files calls `status`, so the counts are not made by hand.
+
+```
+<python> project.py status [--quiet] [--root <project root>]
+<python> project.py init --level minimal|handoff|full [--apply] --templates <claude-md folder> [--root <project root>]
+```
+
+- `status` prints the level in use, the number of files in `data/` (not `DATA-NOTES.md` or README files), the number of runs (task folders and git tags that look like `<task>-<DDMMYY>-run<N>`), the number of notes in the Claude memory folder for the project, the recommended level and the files each level is missing. The last line is `Status: OK at <level>`, `Status: UPGRADE SUGGESTED to <level>` or `Status: NO TEMPLATE`; `--quiet` prints only that line. Nothing is written.
+- The recommendation: from minimal or handoff to full when `data/` holds 3 or more files or there are 5 or more runs; from minimal to handoff when the memory folder holds notes or there are earlier runs. The script cannot count a repeated check because an earlier result was not found, so the handoff template still names it.
+- `init` is a dry run unless `--apply` is given. It adds the files of the level that are missing, never overwrites a file, and appends the missing lines to `.gitignore` (the `sources/` line at least, in a git project). An existing `CLAUDE.md` that differs from the template is left as it is and named, so that it is merged by hand.
+- `--templates` is needed when the script is run from `~/.claude/scripts/`. It is optional when the script is run from the repository.
+- The memory folder is `~/.claude/projects/<project path with dashes>/memory/` (under `CLAUDE_CONFIG_DIR` if that is set).
+- Exit code 0 on success, 2 if the folder or the templates cannot be used.
 
 ## hook_push_check.py
 

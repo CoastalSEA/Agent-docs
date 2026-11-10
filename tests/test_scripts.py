@@ -46,6 +46,7 @@ GUARD = find("hook_guard.py", "scripts")
 RETENTION = find("log_retention.py", "scripts")
 CHECKDOCX = find("check_docx_skill.py", "scripts")
 CONFIRM = find("hook_confirm.py", "scripts")
+PROJECT = find("project.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
 
@@ -1173,6 +1174,188 @@ class DeployHooks(unittest.TestCase):
                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(r.returncode, 1)
         self.assertFalse((self.target / "settings.json").exists())
+
+
+class ProjectScript(unittest.TestCase):
+    """project.py: the template level in use, the counts, the recommendation and init."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "proj"
+        self.root.mkdir()
+        self.config = Path(self.tmp.name) / "config"
+        self.config.mkdir()
+        self.templates = REPO / "claude-md"
+
+    def pr(self, *args):
+        env = {**GIT_ENV, "CLAUDE_CONFIG_DIR": str(self.config)}
+        return subprocess.run([sys.executable, "-I", str(PROJECT), *args, "--root", str(self.root)],
+                              capture_output=True, text=True, env=env)
+
+    def level(self, name):
+        shutil.copytree(self.templates / {"minimal": "project-template-minimal", "handoff": "project-template-handoff",
+                                           "full": "project-template"}[name], self.root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    def data(self, n):
+        (self.root / "data").mkdir(exist_ok=True)
+        for i in range(n):
+            (self.root / "data" / f"f{i}.csv").write_text("x", encoding="utf-8")
+
+    def runs(self, n):
+        for i in range(n):
+            (self.root / "outputs" / f"t{i}-101126-run1").mkdir(parents=True)
+
+    def memory(self, n):
+        folder = self.config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(self.root.resolve())) / "memory"
+        folder.mkdir(parents=True)
+        (folder / "MEMORY.md").write_text("index", encoding="utf-8")
+        for i in range(n):
+            (folder / f"note{i}.md").write_text("n", encoding="utf-8")
+
+    def last(self, r):
+        return r.stdout.strip().splitlines()[-1]
+
+    def test_version_and_an_empty_folder(self):
+        r = subprocess.run([sys.executable, "-I", str(PROJECT), "--version"], capture_output=True, text=True)
+        self.assertIn(version_of(PROJECT), r.stdout)
+        r = self.pr("status")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("NO TEMPLATE", self.last(r))
+
+    def test_levels_are_recognised(self):
+        for name in ("minimal", "handoff", "full"):
+            shutil.rmtree(self.root)
+            self.root.mkdir()
+            self.level(name)
+            self.assertIn(f"Template level in use: {name}", self.pr("status").stdout, name)
+
+    def test_minimal_stays_when_nothing_is_met(self):
+        self.level("minimal")
+        self.data(2)
+        r = self.pr("status")
+        self.assertEqual(self.last(r), "Status: OK at minimal")
+        self.assertNotIn("Recommended level", r.stdout)
+
+    def test_memory_or_runs_suggest_handoff_from_minimal(self):
+        self.level("minimal")
+        self.memory(1)
+        r = self.pr("status")
+        self.assertIn("Recommended level: handoff (the memory folder holds 1 notes)", r.stdout)
+        self.assertEqual(self.last(r), "Status: UPGRADE SUGGESTED to handoff")
+        shutil.rmtree(self.config / "projects")
+        self.runs(1)
+        self.assertIn("handoff (outputs hold 1 runs)", self.pr("status").stdout)
+
+    def test_the_memory_index_alone_is_not_earlier_work(self):
+        self.level("minimal")
+        self.memory(0)
+        self.assertEqual(self.last(self.pr("status")), "Status: OK at minimal")
+
+    def test_data_files_suggest_full_and_notes_and_readmes_are_not_counted(self):
+        self.level("handoff")
+        self.data(2)
+        (self.root / "data" / "README.md").write_text("r", encoding="utf-8")
+        self.assertEqual(self.last(self.pr("status")), "Status: OK at handoff")
+        (self.root / "data" / "DATA-NOTES.md").write_text("n", encoding="utf-8")
+        self.assertIn("Files in data/ (not DATA-NOTES.md or README files): 2", self.pr("status").stdout)
+        (self.root / "data" / "DATA-NOTES.md").unlink()
+        self.data(3)
+        r = self.pr("status")
+        self.assertIn("Files in data/ (not DATA-NOTES.md or README files): 3", r.stdout)
+        self.assertIn("Recommended level: full (data/ holds 3 files (limit 3))", r.stdout)
+
+    def test_runs_count_task_folders_and_tags(self):
+        self.level("handoff")
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "init")
+        for i in range(3):
+            git(self.root, "tag", f"a{i}-101126-run1")
+        git(self.root, "tag", "archive-a0-101126")
+        self.runs(2)
+        git(self.root, "tag", "t0-101126-run1-rejected")
+        r = self.pr("status")
+        self.assertIn("Runs (task folders and tags): 6", r.stdout)
+        self.assertIn("full (outputs hold 6 runs (limit 5))", r.stdout)
+
+    def test_full_is_never_recommended_a_change(self):
+        self.level("full")
+        self.data(5)
+        self.runs(6)
+        self.assertEqual(self.last(self.pr("status")), "Status: OK at full")
+
+    def test_missing_files_are_listed_for_each_level(self):
+        self.level("handoff")
+        r = self.pr("status").stdout
+        self.assertIn("  minimal: none", r)
+        self.assertIn("  handoff: none", r)
+        self.assertIn("  full: data/DATA-NOTES.md, outputs/INDEX.md, records/DECISIONS.md, products/PRODUCTS.md", r)
+
+    def test_quiet_prints_only_the_last_line(self):
+        self.level("minimal")
+        r = self.pr("status", "--quiet")
+        self.assertEqual(r.stdout.strip(), "Status: OK at minimal")
+
+    def test_init_is_a_dry_run_by_default(self):
+        self.level("minimal")
+        before = sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*"))
+        r = self.pr("init", "--level", "full", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Would add: records/DECISIONS.md", r.stdout)
+        self.assertIn("Dry run: nothing written", r.stdout)
+        self.assertEqual(before, sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*")))
+
+    def test_init_adds_missing_files_and_never_overwrites(self):
+        self.level("handoff")
+        handoff = self.root / "records" / "HANDOFF.md"
+        handoff.write_text("my handoff", encoding="utf-8")
+        claude = self.root / "CLAUDE.md"
+        claude.write_text("my rules", encoding="utf-8")
+        r = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(handoff.read_text(encoding="utf-8"), "my handoff")
+        self.assertEqual(claude.read_text(encoding="utf-8"), "my rules")
+        self.assertIn("merge by hand: CLAUDE.md", r.stdout)
+        for rel in ("data/DATA-NOTES.md", "outputs/INDEX.md", "records/DECISIONS.md", "products/PRODUCTS.md", ".gitignore"):
+            self.assertTrue((self.root / rel).is_file(), rel)
+        self.assertEqual(self.pr("status").stdout.count("none"), 3, self.pr("status").stdout)
+        again = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        self.assertIn("Nothing to add.", again.stdout)
+
+    def test_the_template_claude_md_is_copied_when_there_is_none(self):
+        r = self.pr("init", "--level", "minimal", "--apply", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.root / "CLAUDE.md").read_bytes(),
+                         (self.templates / "project-template-minimal" / "CLAUDE.md").read_bytes())
+
+    def test_gitignore_lines_are_appended_once(self):
+        self.level("full")
+        (self.root / ".gitignore").write_text("# mine\nbuild/\nsources/", encoding="utf-8")
+        r = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.root / ".gitignore").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# mine\nbuild/\nsources/\n"), text)
+        self.assertEqual(text.count("sources/"), 2 if "# Downloaded sources" in text else 1)
+        self.assertEqual(text.count("products/*"), 1)
+        self.assertEqual(text.count("__pycache__/"), 1)
+        self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8"), text)
+
+    def test_a_git_project_at_a_lower_level_gets_the_sources_line(self):
+        git(self.root, "init", "-q", "-b", "main")
+        r = self.pr("init", "--level", "minimal", "--apply", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8").strip(), "sources/")
+
+    def test_missing_templates_and_folder_are_refused(self):
+        r = self.pr("init", "--level", "full", "--templates", str(Path(self.tmp.name) / "none"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("templates were not found", r.stderr)
+        r = subprocess.run([sys.executable, "-I", str(PROJECT), "status", "--root", str(Path(self.tmp.name) / "gone")],
+                           capture_output=True, text=True, env=GIT_ENV)
+        self.assertEqual(r.returncode, 2)
 
 
 if __name__ == "__main__":

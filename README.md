@@ -13,7 +13,7 @@ the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section 
 
 ```
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | doctor)
-scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py
+scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook (the hook scripts that are installed are in scripts/)
@@ -88,6 +88,9 @@ the work. The rules are in the global `CLAUDE.md` and the project `CLAUDE.md`; t
   rows match, memory notes are linked, decision rows are not too long.
 - `rotate_records.py` moves the oldest decision rows to the archive when the log passes 100 rows. It
   shows what it would move unless `--apply` is given.
+- `project.py status` reports which project template level a project is at and whether it has outgrown it.
+  `project.py init --level minimal|handoff|full` adds the missing template files; it is a dry run unless
+  `--apply` is given and it never overwrites a file.
 
 Usage of each script, and the commands to run them, are in `scripts/README.md`.
 
@@ -97,7 +100,7 @@ Usage of each script, and the commands to run them, are in `scripts/README.md`.
 python -m unittest discover -s tests
 ```
 
-`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`), the three hook scripts, `log_retention.py` and `deploy.py` in throwaway projects.
+`tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`, `project`), the three hook scripts, `log_retention.py` and `deploy.py` in throwaway projects.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
 every script and skill. Neither touches `~/.claude`. `tests/test_skill_fixtures.py` tests the skill fixtures without a model; `tests/skills/run_fixtures.py` runs skills on those fixtures with headless Claude Code sessions, by hand (see `tests/skills/README.md`). `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
