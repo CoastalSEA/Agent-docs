@@ -13,7 +13,7 @@ folder names made from the temporary project path, and removes them afterwards.
 
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
-                                           [--test-library PATH] [--external]
+                                           [--external]
   skill      project-disclosure, project-disclosure-detailed, analysis-adversary, analysis-adversary-model,
              analysis-adversary-independent, document-adversary, document-adversary-independent, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
@@ -21,8 +21,6 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
-  --test-library PATH  the .enl file of the test EndNote library for the citation-check and literature-search
-             fixtures (or set FIXTURE_ENDNOTE_LIBRARY); a fixture is skipped without it
   --external  also run the two external fixtures: literature-search-external sends a query to OpenAlex, and
              citation-check-external sends the titles, authors, years and DOIs of four records to CrossRef, OpenAlex
              and arXiv (both are skipped otherwise)
@@ -778,18 +776,7 @@ def word_run(script, timeout=180):
 
 
 class TestLibrary:
-    """Shared by the fixtures that read the test EndNote library through a second, read-only server."""
-
-    def locate_library(self, args):
-        lib = getattr(args, "test_library", None) or os.environ.get("FIXTURE_ENDNOTE_LIBRARY")
-        if not lib or not Path(lib).is_file():
-            raise Skip("no test EndNote library (give --test-library or set FIXTURE_ENDNOTE_LIBRARY)")
-        lib = Path(lib).resolve()
-        sdb = lib.with_name(lib.stem + ".Data") / "sdb" / "sdb.eni"
-        if not (REPO / "mcp" / "endnote" / "endnote_server.py").is_file() or not sdb.is_file():
-            raise Skip("the EndNote server or the library database is missing")
-        self.library = lib
-        return lib, sdb
+    """Shared by the fixtures that read a generated EndNote library through a second, read-only server."""
 
     def write_mcp_config(self, tmp):
         self.mcp_config = Path(tmp) / "mcp.json"
@@ -1113,54 +1100,116 @@ class ProofreadStructure(Fixture):
         return out
 
 
+REF_TYPES = {17: "Journal Article", 12: "Web Page", 16: "Report"}
+
+
+def require_server_packages(*names):
+    """Skip a fixture whose generated library is served by the EndNote server when the server's packages are missing."""
+    missing = [n for n in names if importlib.util.find_spec(n) is None]
+    if missing:
+        raise Skip(f"the EndNote server's packages are not importable here: {', '.join(missing)}")
+
+
+def make_pdf(path, lines, font_size=9):
+    """A minimal one-page PDF whose text is the given lines (ASCII only), readable by pypdf."""
+    def esc(s):
+        return s.replace(chr(92), chr(92) * 2).replace("(", chr(92) + "(").replace(")", chr(92) + ")")
+    content = f"BT /F1 {font_size} Tf {font_size + 4} TL 60 740 Td\n" + "".join(f"({esc(ln)}) Tj T*\n" for ln in lines) + "ET"
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>",
+               "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+               f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{obj}\nendobj\n".encode("ascii")
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
+    out += "".join(f"{o:010d} 00000 n \n" for o in offsets).encode("ascii")
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+    Path(path).write_bytes(out)
+
+
+class SyntheticLibrary(TestLibrary):
+    """A generated EndNote library (the two tables the read-only server uses) so that a fixture never touches a real one."""
+    COLUMNS = ("author", "year", "title", "secondary_title", "volume", "number", "pages", "publisher", "abstract", "keywords",
+               "url", "notes", "isbn", "electronic_resource_number")
+
+    def make_library(self, tmp, records, pdfs=None):
+        """records: [dict with the COLUMNS keys that are needed]; ids run from 1. pdfs: {record id: (file name, lines)}."""
+        import sqlite3
+        base = Path(tmp) / "Library"
+        base.mkdir()
+        lib = base / "Synthetic.enl"
+        data = base / "Synthetic.Data"
+        data.mkdir()
+        con = sqlite3.connect(lib)  # the .enl file is itself the SQLite database that the server opens
+        cols = ", ".join(f"{c} TEXT NOT NULL DEFAULT ''" for c in self.COLUMNS)
+        con.execute("CREATE TABLE refs (id INTEGER PRIMARY KEY AUTOINCREMENT, trash_state INTEGER NOT NULL DEFAULT 0, "
+                    f"reference_type INTEGER NOT NULL DEFAULT 17, {cols})")
+        con.execute("CREATE TABLE file_res (refs_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '', "
+                    "file_type INTEGER NOT NULL, file_pos INTEGER NOT NULL)")
+        for rec in records:
+            names = [c for c in self.COLUMNS if c in rec]
+            con.execute(f"INSERT INTO refs ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                        [rec[c] for c in names])
+        for ref_id, (name, lines) in (pdfs or {}).items():
+            (data / "PDF").mkdir(exist_ok=True)
+            make_pdf(data / "PDF" / name, lines)
+            con.execute("INSERT INTO file_res (refs_id, file_path, file_type, file_pos) VALUES (?, ?, 0, 0)", (ref_id, name))
+        con.commit()
+        con.close()
+        self.library = lib.resolve()
+        self.write_mcp_config(tmp)
+        return self.library
+
+
 # ---------------------------------------------------------------------------------------------------------
-class CitationCheck(TestLibrary, Fixture):
+class CitationCheck(SyntheticLibrary, Fixture):
     name = "citation-check"
     timeout = 1800
+    # the generated library: ids run from 1 in this order
+    LIBRARY = [
+        {"author": "Coastal Hazards Panel,", "year": "2023", "title": "Annual Coastal Hazards Outlook 2023", "number": "May 2025"},
+        {"author": "Tidal Futures Commission", "year": "2023", "title": "Synthesis Report on Tidal Change 2023"},
+        {"author": "OpenShore Atlas", "year": "2025", "title": "Open Spatial Shoreline Data and Research"},
+    ]
     # (library id, rec-number written in the field, year written in the field or None for the library's year)
     CITES = [(1, 1, None), (2, 52, None), (3, 3, "2024")]
     INVENTED = ("Harrington and Osei", "2021", "Adaptive Planning Horizons for Estuarine Flood Defences", 99)
     checks_listed = (
         "a report citation-check-report.md is saved in an output folder of the task",
         "the invented reference is reported as unresolved",
-        "the year in the field (2024) against the library (2025) is reported for WorldPop",
-        "the stale rec-number 52 against the library record is reported for IPCC",
-        "the correct reference (World Economic Forum) is not reported as a problem",
+        "the year in the field (2024) against the library (2025) is reported for OpenShore Atlas",
+        "the stale rec-number 52 against the library record is reported for the Tidal Futures Commission",
+        "the correct reference (Coastal Hazards Panel) is not reported as a problem",
         "no external call was made",
         "the report says external verification was not done",
         "the manuscript, the library and the project files are unchanged",
     )
 
     def build(self, tmp, args=None):
-        lib, sdb = self.locate_library(args)
-        import sqlite3
-        con = sqlite3.connect("file:" + sdb.as_posix() + "?mode=ro", uri=True)
-        records = {}
-        for i, _, _ in self.CITES:
-            row = con.execute("select author, year, title, number, reference_type from refs where id = ?", (i,)).fetchone()
-            if not row or not row[2]:
-                raise Skip(f"library record {i} not found or has no title")
-            # the snapshot in the field repeats the library record exactly, so only the planted faults differ
-            records[i] = (row[0], row[1], row[2], row[3] or "", row[4])
-        con.close()
-        self.records = records
+        require_server_packages("mcp")
+        self.make_library(tmp, self.LIBRARY)
+        # the snapshot in the field repeats the library record exactly, so only the planted faults differ
+        self.records = {n + 1: (r["author"], r["year"], r["title"], r.get("number", ""), 17) for n, r in enumerate(self.LIBRARY)}
         root = (Path(tmp) / "Paper").resolve()
         root.mkdir()
         self.manuscript = root / "manuscript.docx"
         self._write_docx(self.manuscript)
-        self.write_mcp_config(tmp)
         self.root = root
         self.before = tree_hashes(root)
         self.lib_before = self._library_hashes()
         return root
 
     @staticmethod
-    def _field(author, year, title, recnum, display, number="", reftype=12):
+    def _field(author, year, title, recnum, display, number="", reftype=17):
         esc = lambda s: s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         cite = (f"<EndNote><Cite><Author>{esc(author)}</Author><Year>{year}</Year><RecNum>{recnum}</RecNum>"
                 f"<DisplayText>{esc(display)}</DisplayText><record><rec-number>{recnum}</rec-number>"
                 f"<foreign-keys><key app=\"EN\" db-id=\"fixture\">{recnum}</key></foreign-keys>"
-                f"<ref-type name=\"Web Page\">{reftype}</ref-type><contributors><authors><author>{esc(author)}</author>"
+                f"<ref-type name=\"{REF_TYPES.get(reftype, 'Generic')}\">{reftype}</ref-type><contributors><authors><author>{esc(author)}</author>"
                 f"</authors></contributors><titles><title>{esc(title)}</title></titles>"
                 + (f"<number>{esc(number)}</number>" if number else "") +
                 f"<dates><year>{year}</year></dates></record></Cite></EndNote>")
@@ -1232,9 +1281,9 @@ class CitationCheck(TestLibrary, Fixture):
         add(self.checks_listed[0], text is not None)
         add(self.checks_listed[1], lines_with("Adaptive Planning", any_of=("unresolved", "not found", "no match", "no reasonable"))
             or lines_with("Harrington", any_of=("unresolved", "not found", "no match", "no reasonable")))
-        add(self.checks_listed[2], lines_with("WorldPop", "2024", "2025"))
-        add(self.checks_listed[3], lines_with("IPCC", "52") or lines_with("AR6", "52"))
-        bad = lines_with("World Economic Forum", any_of=("mismatch", "unresolved", "ambiguous", "drift"))
+        add(self.checks_listed[2], lines_with("OpenShore", "2024", "2025"))
+        add(self.checks_listed[3], lines_with("Tidal Futures", "52") or lines_with("Synthesis Report", "52"))
+        bad = lines_with("Coastal Hazards", any_of=("mismatch", "unresolved", "ambiguous", "drift"))
         add(self.checks_listed[4], not bad, f"lines: {bad[:2]}")
         external = []
         pattern = re.compile(r"crossref\.org|openalex\.org|semanticscholar|arxiv\.org|\"name\":\s*\"(WebFetch|WebSearch)\"", re.I)
@@ -1247,68 +1296,6 @@ class CitationCheck(TestLibrary, Fixture):
         add(self.checks_listed[6], re.search(r"not (verified|checked|done|run)|declined|no external", t, re.I) is not None)
         add(self.checks_listed[7], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
         return out
-
-
-def require_server_packages(*names):
-    """Skip a fixture whose generated library is served by the EndNote server when the server's packages are missing."""
-    missing = [n for n in names if importlib.util.find_spec(n) is None]
-    if missing:
-        raise Skip(f"the EndNote server's packages are not importable here: {', '.join(missing)}")
-
-
-def make_pdf(path, lines, font_size=9):
-    """A minimal one-page PDF whose text is the given lines (ASCII only), readable by pypdf."""
-    def esc(s):
-        return s.replace(chr(92), chr(92) * 2).replace("(", chr(92) + "(").replace(")", chr(92) + ")")
-    content = f"BT /F1 {font_size} Tf {font_size + 4} TL 60 740 Td\n" + "".join(f"({esc(ln)}) Tj T*\n" for ln in lines) + "ET"
-    objects = ["<< /Type /Catalog /Pages 2 0 R >>",
-               "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-               "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-               f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
-               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
-    out, offsets = b"%PDF-1.4\n", []
-    for i, obj in enumerate(objects, 1):
-        offsets.append(len(out))
-        out += f"{i} 0 obj\n{obj}\nendobj\n".encode("ascii")
-    xref = len(out)
-    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
-    out += "".join(f"{o:010d} 00000 n \n" for o in offsets).encode("ascii")
-    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
-    Path(path).write_bytes(out)
-
-
-class SyntheticLibrary(TestLibrary):
-    """A generated EndNote library (the two tables the read-only server uses) so that a fixture never touches a real one."""
-    COLUMNS = ("author", "year", "title", "secondary_title", "volume", "number", "pages", "publisher", "abstract", "keywords",
-               "url", "notes", "isbn", "electronic_resource_number")
-
-    def make_library(self, tmp, records, pdfs=None):
-        """records: [dict with the COLUMNS keys that are needed]; ids run from 1. pdfs: {record id: (file name, lines)}."""
-        import sqlite3
-        base = Path(tmp) / "Library"
-        base.mkdir()
-        lib = base / "Synthetic.enl"
-        data = base / "Synthetic.Data"
-        data.mkdir()
-        con = sqlite3.connect(lib)  # the .enl file is itself the SQLite database that the server opens
-        cols = ", ".join(f"{c} TEXT NOT NULL DEFAULT ''" for c in self.COLUMNS)
-        con.execute("CREATE TABLE refs (id INTEGER PRIMARY KEY AUTOINCREMENT, trash_state INTEGER NOT NULL DEFAULT 0, "
-                    f"reference_type INTEGER NOT NULL DEFAULT 17, {cols})")
-        con.execute("CREATE TABLE file_res (refs_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '', "
-                    "file_type INTEGER NOT NULL, file_pos INTEGER NOT NULL)")
-        for rec in records:
-            names = [c for c in self.COLUMNS if c in rec]
-            con.execute(f"INSERT INTO refs ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
-                        [rec[c] for c in names])
-        for ref_id, (name, lines) in (pdfs or {}).items():
-            (data / "PDF").mkdir(exist_ok=True)
-            make_pdf(data / "PDF" / name, lines)
-            con.execute("INSERT INTO file_res (refs_id, file_path, file_type, file_pos) VALUES (?, ?, 0, 0)", (ref_id, name))
-        con.commit()
-        con.close()
-        self.library = lib.resolve()
-        self.write_mcp_config(tmp)
-        return self.library
 
 
 def flatten_strings(value):
@@ -1562,12 +1549,21 @@ class CitationCheckExternal(SyntheticLibrary, Fixture):
 
 
 # ---------------------------------------------------------------------------------------------------------
-class LiteratureSearch(TestLibrary, Fixture):
-    """The local half of the skill: the test EndNote library only, with no external source."""
+class LiteratureSearch(SyntheticLibrary, Fixture):
+    """The local half of the skill: a generated EndNote library only, with no external source."""
     name = "literature-search"
     timeout = 1200
     WANTED = ["Theatre in Education", "Serious game"]
-    UNRELATED = ["Open Spatial Demographic Data", "AR6 Synthesis"]
+    UNRELATED = ["Open Spatial Shoreline Data", "Synthesis Report on Tidal Change"]
+    LIBRARY = [
+        {"author": "Lyon, A", "year": "2019", "title": "Theatre in Education for public engagement with flood risk",
+         "secondary_title": "Journal of Applied Theatre", "abstract": "Drama workshops used to engage the public with flood risk."},
+        {"author": "Moreau, C", "year": "2021", "title": "Serious game design for public engagement in coastal planning",
+         "secondary_title": "Simulation and Gaming", "abstract": "A game used to engage communities in coastal planning."},
+        {"author": "OpenShore Atlas", "year": "2025", "title": "Open Spatial Shoreline Data and Research"},
+        {"author": "Tidal Futures Commission", "year": "2023", "title": "Synthesis Report on Tidal Change 2023"},
+        {"author": "Ward, P", "year": "2016", "title": "Sediment budgets of sandy barrier islands"},
+    ]
     checks_listed = (
         "a report literature-search-report.md is saved in an output folder of the task",
         "the derived search terms are reported",
@@ -1581,17 +1577,10 @@ class LiteratureSearch(TestLibrary, Fixture):
     )
 
     def build(self, tmp, args=None):
-        lib, sdb = self.locate_library(args)
-        import sqlite3
-        con = sqlite3.connect("file:" + sdb.as_posix() + "?mode=ro", uri=True)
-        titles = {r[0] for r in con.execute("select title from refs")}
-        con.close()
-        missing = [w for w in self.WANTED + self.UNRELATED if not any(w in t for t in titles)]
-        if missing:
-            raise Skip(f"the test library lacks the records this fixture expects: {missing}")
+        require_server_packages("mcp")
+        self.make_library(tmp, self.LIBRARY)
         root = (Path(tmp) / "Review").resolve()
         root.mkdir()
-        self.write_mcp_config(tmp)
         self.root = root
         self.before = tree_hashes(root)
         self.lib_before = self._library_hashes()
@@ -1629,7 +1618,7 @@ class LiteratureSearch(TestLibrary, Fixture):
 
 
 # ---------------------------------------------------------------------------------------------------------
-class LiteratureSearchExternal(TestLibrary, Fixture):
+class LiteratureSearchExternal(SyntheticLibrary, Fixture):
     """OpenAlex only, with an import list: structure and de-duplication, not content (needs --external)."""
     name = "literature-search-external"
     timeout = 1800
@@ -1644,14 +1633,19 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         "no source other than OpenAlex was queried",
         "the library and the project files are unchanged",
     )
+    # records that the query (tidal inlet morphodynamics) cannot match, so that every candidate comes from OpenAlex
+    LIBRARY = [
+        {"author": "Ward, P", "year": "2016", "title": "Public perception of flood warnings"},
+        {"author": "Lyon, A", "year": "2019", "title": "Survey methods for seagrass meadows"},
+    ]
 
     def build(self, tmp, args=None):
         if not getattr(args, "external", False):
             raise Skip("sends a query to OpenAlex; give --external to run it")
-        lib, sdb = self.locate_library(args)
+        require_server_packages("mcp")
+        self.make_library(tmp, self.LIBRARY)
         root = (Path(tmp) / "Search").resolve()
         root.mkdir()
-        self.write_mcp_config(tmp)
         self.root = root
         self.before = tree_hashes(root)
         self.lib_before = self._library_hashes()
@@ -1774,7 +1768,6 @@ def main(argv):
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--timeout", type=int, default=None)
-    ap.add_argument("--test-library", default=None)
     ap.add_argument("--external", action="store_true")
     ap.add_argument("--claude", default=shutil.which("claude") or "claude")
     ap.add_argument("--permission-mode", default="auto")

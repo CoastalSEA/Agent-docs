@@ -658,25 +658,13 @@ class ProofreadFixture(Base):
 class CitationCheckFixture(Base):
     def setUp(self):
         super().setUp()
-        import sqlite3
-        self.lib = self.work / "Test Library.enl"
-        self.lib.write_bytes(b"enl")
-        data = self.work / "Test Library.Data" / "sdb"
-        data.mkdir(parents=True)
-        con = sqlite3.connect(data / "sdb.eni")
-        con.execute("create table refs (id integer primary key, author text, year text, title text, number text, reference_type integer)")
-        con.executemany("insert into refs values (?,?,?,?,?,?)", [
-            (1, "World Economic Forum,", "2023", "Global Risks Report 2023", "May 2025", 16),
-            (2, "IPCC", "2023", "AR6 Synthesis Report: Climate Change 2023", "", 16),
-            (3, "WorldPop", "2025", "Open Spatial Demographic Data and Research", "", 16)])
-        con.commit()
-        con.close()
-
-        class Args:
-            test_library = str(self.lib)
+        self.saved = rf.require_server_packages
+        rf.require_server_packages = lambda *names: None
+        self.addCleanup(setattr, rf, "require_server_packages", self.saved)
         self.fx = rf.CitationCheck()
         (self.work / "tmp").mkdir()
-        self.root = self.fx.build(self.work / "tmp", Args())
+        self.root = self.fx.build(self.work / "tmp")
+        self.lib = self.fx.library
 
     def fields(self):
         import zipfile
@@ -697,7 +685,7 @@ class CitationCheckFixture(Base):
     def test_the_manuscript_holds_the_planted_fields(self):
         fields = self.fields()
         self.assertEqual(len(fields), 4)
-        self.assertEqual(fields[0], ("1", "2023", "Global Risks Report 2023"))
+        self.assertEqual(fields[0], ("1", "2023", "Annual Coastal Hazards Outlook 2023"))
         self.assertEqual(fields[1][0], "52")
         self.assertEqual(fields[2][1], "2024")
         self.assertEqual(fields[3][0], "99")
@@ -709,11 +697,11 @@ class CitationCheckFixture(Base):
 
 | Reference | Finding |
 |---|---|
-| IPCC 2023 AR6 | resolved; the field rec-number 52 differs from the library record 2 |
-| WorldPop 2024 | year mismatch: field 2024, library 2025 |
+| Tidal Futures Commission 2023 | resolved; the field rec-number 52 differs from the library record 2 |
+| OpenShore Atlas 2024 | year mismatch: field 2024, library 2025 |
 | Harrington and Osei 2021, Adaptive Planning Horizons | unresolved: no title match in the library |
 
-World Economic Forum 2023 was resolved with no issue. External verification was not done: not verified.
+Coastal Hazards Panel 2023 was resolved with no issue. External verification was not done: not verified.
 """)
 
     def write(self, text):
@@ -733,7 +721,7 @@ World Economic Forum 2023 was resolved with no issue. External verification was 
             (self.GOOD.replace("unresolved", "resolved"), c[1]),
             (self.GOOD.replace("2024", "x"), c[2]),
             (self.GOOD.replace("52", "n"), c[3]),
-            (self.GOOD + "\nWorld Economic Forum 2023: year mismatch\n", c[4]),
+            (self.GOOD + "\nCoastal Hazards Panel 2023: year mismatch\n", c[4]),
             (self.GOOD.replace("External verification was not done: not verified.", ""), c[6]),
         ]
         for text, check in cases:
@@ -753,37 +741,17 @@ World Economic Forum 2023 was resolved with no issue. External verification was 
         self.lib.write_bytes(b"changed")
         self.assertFalse(self.results()[self.fx.checks_listed[7]])
 
-    def test_the_fixture_is_skipped_without_a_library(self):
-        class Args:
-            test_library = None
-        saved = os.environ.pop("FIXTURE_ENDNOTE_LIBRARY", None)
-        try:
+    def test_the_fixture_is_skipped_without_the_server_packages(self):
+        rf.require_server_packages = self.saved
+        from unittest import mock
+        with mock.patch.object(importlib.util, "find_spec", return_value=None):
             with self.assertRaises(rf.Skip):
-                rf.CitationCheck().build(self.work / "y", Args())
-        finally:
-            if saved:
-                os.environ["FIXTURE_ENDNOTE_LIBRARY"] = saved
+                rf.CitationCheck().build(self.work / "no-packages")
 
 
 def html_unescape(text):
     import html
     return html.unescape(text)
-
-
-def make_library(work, titles):
-    """A fake EndNote library: an .enl file and the .Data/sdb/sdb.eni database with the given titles."""
-    import sqlite3
-    lib = Path(work) / "Test Library.enl"
-    lib.write_bytes(b"enl")
-    data = Path(work) / "Test Library.Data" / "sdb"
-    data.mkdir(parents=True)
-    con = sqlite3.connect(data / "sdb.eni")
-    con.execute("create table refs (id integer primary key, author text, year text, title text, number text, "
-                "reference_type integer)")
-    con.executemany("insert into refs values (?,?,?,?,?,?)", [(i + 1, "A", "2025", t, "", 16) for i, t in enumerate(titles)])
-    con.commit()
-    con.close()
-    return lib
 
 
 def write_transcript(home, root, entries):
@@ -799,14 +767,22 @@ def tool_call(name, **inputs):
 class LiteratureSearchFixture(Base):
     def setUp(self):
         super().setUp()
-        self.lib = make_library(self.work, ["Global Risks Report", "Theatre in Education", "Serious game",
-                                            "Open Spatial Demographic Data and Research", "AR6 Synthesis Report"])
-
-        class Args:
-            test_library = str(self.lib)
+        self.saved = rf.require_server_packages
+        rf.require_server_packages = lambda *names: None
+        self.addCleanup(setattr, rf, "require_server_packages", self.saved)
         self.fx = rf.LiteratureSearch()
         (self.work / "tmp").mkdir()
-        self.root = self.fx.build(self.work / "tmp", Args())
+        self.root = self.fx.build(self.work / "tmp")
+        self.lib = self.fx.library
+
+    def test_the_library_holds_the_records_the_checks_expect(self):
+        import sqlite3
+        con = sqlite3.connect(f"file:{self.lib.as_posix()}?mode=ro", uri=True)
+        titles = [r[0] for r in con.execute("select title from refs order by id")]
+        con.close()
+        for word in rf.LiteratureSearch.WANTED + rf.LiteratureSearch.UNRELATED:
+            self.assertTrue(any(word in title for title in titles), word)
+        self.assertEqual(self.fx.checks_listed[2], "the two library records that match the question are in the candidate list")
 
     GOOD = ("# Literature search\n\nDerived search terms: theatre, serious game.\n\n"
             "Sources: EndNote library, 2 hits. No external source was queried (OpenAlex not queried).\n\n"
@@ -827,7 +803,7 @@ class LiteratureSearchFixture(Base):
         c = self.fx.checks_listed
         cases = [
             (self.GOOD.replace("Theatre in Education", "x"), c[2]),
-            (self.GOOD + "| Open Spatial Demographic Data and Research | none |\n", c[3]),
+            (self.GOOD + "| Open Spatial Shoreline Data and Research | none |\n", c[3]),
             (self.GOOD.replace("Derived search terms: theatre, serious game.", "Terms used."), c[1]),
             (self.GOOD.replace("No external source was queried (OpenAlex not queried).", "Done."), c[5]),
         ]
@@ -846,24 +822,22 @@ class LiteratureSearchFixture(Base):
         self.lib.write_bytes(b"changed")
         self.assertFalse(self.results()[self.fx.checks_listed[7]])
 
-    def test_the_fixture_is_skipped_without_the_records_it_expects(self):
-        other = self.work / "other"
-        other.mkdir()
-        lib = make_library(other, ["Something else"])
-
-        class Args:
-            test_library = str(lib)
-        with self.assertRaises(rf.Skip):
-            rf.LiteratureSearch().build(self.work / "z", Args())
+    def test_the_fixture_is_skipped_without_the_server_packages(self):
+        rf.require_server_packages = self.saved
+        from unittest import mock
+        with mock.patch.object(importlib.util, "find_spec", return_value=None):
+            with self.assertRaises(rf.Skip):
+                rf.LiteratureSearch().build(self.work / "no-packages")
 
 
 class LiteratureSearchExternalFixture(Base):
     def setUp(self):
         super().setUp()
-        self.lib = make_library(self.work, ["One"])
+        self.saved = rf.require_server_packages
+        rf.require_server_packages = lambda *names: None
+        self.addCleanup(setattr, rf, "require_server_packages", self.saved)
 
         class Args:
-            test_library = str(self.lib)
             external = True
         self.Args = Args
         self.fx = rf.LiteratureSearchExternal()
