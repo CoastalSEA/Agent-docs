@@ -785,6 +785,9 @@ class ProofreadFixture(Base):
         saved = rf.word_available
         rf.word_available = lambda: True
         self.addCleanup(setattr, rf, "word_available", saved)
+        saved_platform = rf.sys.platform
+        rf.sys.platform = "win32"  # the fixture is skipped off Windows; build the document on any system
+        self.addCleanup(setattr, rf.sys, "platform", saved_platform)
         fx = rf.Proofread()
         (self.work / "gen").mkdir()
         root = fx.build(self.work / "gen")
