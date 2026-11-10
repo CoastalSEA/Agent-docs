@@ -202,6 +202,7 @@ configuration.
 
 - The scripts and tests pass on Windows, macOS and Linux (the workflow in `.github/workflows/tests.yml`). The
   interactive parts have only been used on Windows: skills, the status line, the EndNote server and the machine files.
+- After a Claude Code update or a skill sync, the `proofread` summary and `deploy.py doctor` warn if the `docx` skill scripts it uses have changed. Re-run `python tests/skills/run_fixtures.py proofread proofread-structure` (see `tests/skills/README.md`), then `check_docx_skill.py --accept` (see `scripts/README.md`).
 - A skill edited in a session does not take effect until a new session starts.
 - Before the script, files were copied by hand and checked with `diff`. The script replaces
   that routine for the files in the table above.

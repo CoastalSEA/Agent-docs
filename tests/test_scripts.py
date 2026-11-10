@@ -1087,6 +1087,29 @@ class CheckDocxSkill(unittest.TestCase):
         self.assertIn("changed since", r.stdout)
         self.assertEqual(self.run_check("--quiet").stdout.count("OK"), 0)
 
+    def test_find_warns_on_standard_error_only_when_the_scripts_changed(self):
+        folder = self.synced()
+        r = self.run_check("--find")
+        self.assertEqual((r.returncode, r.stderr), (0, ""), "nothing recorded yet: no warning")
+        self.assertEqual(self.run_check("--accept").returncode, 0)
+        r = self.run_check("--find")
+        self.assertEqual((r.returncode, r.stderr), (0, ""), "unchanged: no warning")
+        (folder / "merge_runs.py").write_text((folder / "merge_runs.py").read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+        r = self.run_check("--find")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(Path(r.stdout.strip()).resolve(), folder.resolve(), "standard output stays just the folder")
+        self.assertIn("WARNING", r.stderr)
+        self.assertIn("changed since", r.stderr)
+        self.assertIn("run_fixtures.py proofread proofread-structure", r.stderr)
+        self.assertEqual(self.run_check("--accept").returncode, 0)
+        self.assertEqual(self.run_check("--find").stderr, "")
+
+    def test_find_does_not_run_the_interface_check(self):
+        self.synced(**{"comment.py": "usage: comment.py input text"})  # lacks --author
+        r = self.run_check("--find")
+        self.assertEqual(r.returncode, 0, "--find only locates the folder")
+        self.assertEqual(self.run_check().returncode, 1, "the full check still fails")
+
     def test_accept_is_refused_when_the_interface_check_fails(self):
         self.synced(**{"comment.py": "usage: comment.py input text"})
         r = self.run_check("--accept")

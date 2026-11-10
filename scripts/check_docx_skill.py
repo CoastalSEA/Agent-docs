@@ -17,7 +17,9 @@ Search order: the environment variable DOCX_SKILL_DIR (a scripts folder); each -
 default `~/.claude`, the Claude desktop app's skills-plugin folder for the platform.
 
 Usage: check_docx_skill.py [--find] [--accept] [--claude-dir DIR] [--search-dir DIR ...] [--quiet] [--version]
-  --find        print only the folder that holds the scripts; exit 1 with a message on standard error if there is none
+  --find        print only the folder that holds the scripts; exit 1 with a message on standard error if there is none.
+                If the scripts changed since they were accepted, also write a one-line warning to standard error (the exit
+                code stays 0), so that the proofread skill can pass it on at the moment it matters. It skips the --help checks.
   --accept      record the fingerprint of the scripts found now as the known-good one (only if the interface check passes)
   --claude-dir  the Claude configuration folder (default: ~/.claude)
   --search-dir  an extra folder to search: a scripts folder, or one that holds docx/scripts (may be repeated)
@@ -39,6 +41,8 @@ from pathlib import Path
 
 VERSION = "1.0"
 STATE = "docx-skill.json"
+CHANGED = ("the docx skill scripts changed since {when}: re-run the proofread fixtures (`python tests/skills/run_fixtures.py "
+           "proofread proofread-structure`, from the Agent-docs repository), then `check_docx_skill.py --accept`")
 # script (relative to the scripts folder) -> flags that its --help must show
 EXPECTED = {
     "office/validate.py": ["--original", "--author"],
@@ -133,8 +137,8 @@ def recorded(claude_dir):
         return None
 
 
-def inspect(claude_dir, extra=()):
-    """The result as a dict: folder, others, problems, fingerprint, recorded."""
+def inspect(claude_dir, extra=(), check_interface=True):
+    """The result as a dict: folder, others, problems, fingerprint, recorded. check_interface=False skips the --help runs."""
     paths = candidates(claude_dir, extra)
     valid = [p for p in paths if complete(p)]
     result = {"folder": None, "others": [], "problems": [], "fingerprint": None, "recorded": recorded(claude_dir)}
@@ -145,9 +149,17 @@ def inspect(claude_dir, extra=()):
         return result
     result["folder"] = valid[0]
     result["others"] = valid[1:]
-    result["problems"] = interface(valid[0])
+    result["problems"] = interface(valid[0]) if check_interface else []
     result["fingerprint"] = fingerprint(valid[0])
     return result
+
+
+def changed_message(result):
+    """The warning text if the scripts differ from the recorded fingerprint, otherwise None."""
+    rec = result["recorded"]
+    if rec and rec.get("fingerprint") and result["fingerprint"] and rec["fingerprint"] != result["fingerprint"]:
+        return CHANGED.format(when=rec.get("accepted", "the fingerprint was recorded"))
+    return None
 
 
 def lines(result):
@@ -168,8 +180,7 @@ def lines(result):
     elif rec["fingerprint"] == result["fingerprint"]:
         out.append(("OK", f"fingerprint matches the one accepted on {rec.get('accepted', 'an earlier date')}"))
     else:
-        out.append(("WARN", f"the scripts changed since {rec.get('accepted', 'the fingerprint was recorded')}: re-run the proofread "
-                            "fixtures (tests/skills/run_fixtures.py), then `check_docx_skill.py --accept`"))
+        out.append(("WARN", changed_message(result)))
     return out
 
 
@@ -182,12 +193,15 @@ def main(argv):
     ap.add_argument("--claude-dir", default=str(Path.home() / ".claude"))
     ap.add_argument("--search-dir", action="append", default=[])
     a = ap.parse_args(argv)
-    result = inspect(a.claude_dir, a.search_dir)
+    result = inspect(a.claude_dir, a.search_dir, check_interface=not a.find)
     if a.find:
         if result["folder"] is None:
             print("; ".join(result["problems"]), file=sys.stderr)
             return 1
         print(result["folder"])
+        warning = changed_message(result)
+        if warning:
+            print("WARNING: " + warning, file=sys.stderr)
         return 0
     if a.accept:
         if result["folder"] is None or result["problems"]:

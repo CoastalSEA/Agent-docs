@@ -36,7 +36,7 @@ If the invocation does not say which part of the manuscript to check, ask rather
 
 Use the `docx` skill's own editing workflow for the mechanical part. Do not reinvent XML handling.
 
-- **Locate the `docx` skill scripts first.** Run `check_docx_skill.py --find` (the form is in `machine.md`; it takes no `--root`). It prints the folder that holds `comment.py`, `merge_runs.py` and `office/validate.py`; call the scripts from there. If it prints nothing or fails, search `~/.claude/skills` and the Claude plugin folders for `docx/scripts/office/validate.py`. If the scripts are still not found, say so in the summary (for example "validator not run: docx skill scripts not found") and rely on the Word check alone. Do not skip the validator silently.
+- **Locate the `docx` skill scripts first.** Run `check_docx_skill.py --find` (the form is in `machine.md`; it takes no `--root`). It prints the folder that holds `comment.py`, `merge_runs.py` and `office/validate.py`; call the scripts from there. If it prints nothing or fails, search `~/.claude/skills` and the Claude plugin folders for `docx/scripts/office/validate.py`. If the scripts are still not found, say so in the summary (for example "validator not run: docx skill scripts not found") and rely on the Word check alone. Do not skip the validator silently. If it also prints a warning that the scripts changed since they were last accepted, repeat that warning in the summary.
 - `merge_runs.py`, `comment.py` and the validator need `defusedxml` and `lxml`. Check that both import before relying on the scripts; if not, install them once (see `machine.md` for how packages are installed) rather than hand-rolling the XML.
 - Unpack, then run `merge_runs.py` so fragmented runs are findable. It does not merge runs whose `rPr` differs, even trivially. An edit or comment anchor that spans several runs needs each run's own `rPr` matched when splitting or wrapping.
 - **Track Changes:** wrap the correction in `<w:ins>`/`<w:del>` (author `"Claude"`, current date, a unique `w:id` for each). When the target sits inside a longer run, split the run at the target's boundaries and keep sibling content (for example a `<w:fldChar>`) in its own untouched run.
@@ -110,7 +110,7 @@ Give a short summary in the chat response, not inside the document: the document
 3. Comments: the count against `x_max`.
 4. Journal guidelines: the URLs fetched and what each returned (including a blocked fetch or a stale-versus-live discrepancy), or "no journal named".
 5. Figure, table and citation-matching issues: unresolved cross-references, captions that nothing refers to, citations with no References entry, entries that nothing cites, or "none".
-6. Verification: the validator (ran and passed, or not run and why), the Word check, and any other check that did not run and why.
+6. Verification: the validator (ran and passed, or not run and why), the Word check, any warning from `check_docx_skill.py`, and any other check that did not run and why.
 7. Out of scope: citation source-verification is not done here; use `citation-check`.
 
 ## Checks
