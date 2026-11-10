@@ -14,8 +14,8 @@ folder names made from the temporary project path, and removes them afterwards.
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
                                            [--estuary-doc PATH] [--test-library PATH] [--external]
-  skill      project-disclosure, analysis-adversary, proofread, citation-check, literature-search,
-             literature-search-external (default: all that can run)
+  skill      project-disclosure, analysis-adversary, proofread, proofread-structure, citation-check,
+             literature-search, literature-search-external (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
@@ -29,13 +29,15 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
              started in the default mode cannot get approval for run control or Python commands)
   --out      folder for the results (default: working_docs/skill-runs under the repository)
 Inputs:  the live Claude configuration; `claude` on PATH.
-Outputs: <out>/<skill>-<DDMMYY-HHMM>/ with reply.txt, the saved deliverable and checks.json; a table on standard output.
+Outputs: <out>/<skill>-<DDMMYY-HHMM>/ with reply.txt, the saved deliverable, checks.json and, for the proofread fixtures,
+         docx-skill-check.txt (whether the docx skill scripts are present and unchanged); a table on standard output.
 Exit:    0 if every check of every fixture that ran passed (a skipped fixture is not a failure); 1 otherwise.
 Version: see VERSION; `--version` prints it.
 """
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
@@ -49,7 +51,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.2"
+VERSION = "1.3"
 REPO = Path(__file__).resolve().parents[2]
 CLAUDE_HOME = Path.home() / ".claude"
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -93,6 +95,7 @@ class Fixture:
     checks_listed = ()
     timeout = 900
     max_turns = 30
+    uses_docx_skill = False
 
     def extra_args(self, root):
         """Extra arguments for the claude command."""
@@ -421,6 +424,7 @@ class TestLibrary:
 # ---------------------------------------------------------------------------------------------------------
 class Proofread(Fixture):
     name = "proofread"
+    uses_docx_skill = True
     timeout = 1800
     # (text in the converted paragraph, text with the planted fault); each lies inside one run
     PLANTS = [
@@ -443,6 +447,7 @@ class Proofread(Fixture):
         "comments: at most 5, each at most 50 words",
         "the reply says that citation accuracy is not checked (citation-check)",
         "Word opens the proofread copy without error and reports revisions",
+        "the reply says that the validator ran or that it did not",
     )
 
     def build(self, tmp, args=None):
@@ -526,6 +531,189 @@ class Proofread(Fixture):
                 "'comments=' + $d.Comments.Count; $d.Close($false) }\nfinally { $w.Quit() }\n")
             m = re.search(r"revisions=(\d+)", text)
             add(self.checks_listed[8], code == 0 and m is not None and int(m.group(1)) >= 1, text[:160])
+        add(self.checks_listed[9], "validat" in rl)
+        return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+def require_word():
+    if sys.platform != "win32" or not word_available():
+        raise Skip("Microsoft Word is not available (the proofread skill and this fixture need it)")
+
+
+def xml_text(text):
+    return html.escape(text, quote=False)
+
+
+def w_run(text):
+    return f'<w:r><w:t xml:space="preserve">{xml_text(text)}</w:t></w:r>'
+
+
+def w_para(*runs):
+    return "<w:p>" + "".join(r if r.startswith("<") else w_run(r) for r in runs) + "</w:p>"
+
+
+def w_field(instruction, result):
+    return ('<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            f'<w:r><w:instrText xml:space="preserve"> {instruction} </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            f'{w_run(result)}<w:r><w:fldChar w:fldCharType="end"/></w:r>')
+
+
+def write_minimal_docx(path, paragraphs):
+    """A minimal .docx (content types, relationships, document.xml) whose body holds the given paragraph XML."""
+    document = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+                + "".join(paragraphs) + "</w:body></w:document>")
+    types = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/'
+             'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-'
+             'package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override '
+             'PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+             'wordprocessingml.document.main+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.'
+            'org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+            'officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", types)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", document)
+
+
+def comment_bodies(path):
+    """The text of each comment in a .docx."""
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/comments.xml").decode("utf-8") if "word/comments.xml" in z.namelist() else ""
+    return [re.sub(r"\s+", " ", paragraph_text(c, "accept")).strip() for c in re.findall(r"<w:comment\b.*?</w:comment>", xml, re.S)]
+
+
+def revision_authors(path):
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+    return set(re.findall(r"<w:(?:ins|del)\b[^>]*w:author=\"([^\"]*)\"", xml))
+
+
+def clauses(text):
+    """Sentences and list items, so that a finding about one item is not read as a finding about its neighbour."""
+    return [c for c in re.split(r"(?<!et al)[.;]\s|\n+", text) if c.strip()]
+
+
+# ---------------------------------------------------------------------------------------------------------
+class ProofreadStructure(Fixture):
+    """The other half of the proofread skill: captions, cross-references and citations against the References list."""
+    name = "proofread-structure"
+    timeout = 1800
+    uses_docx_skill = True
+    PROBLEM = re.compile(
+        r"cross-?ref|not (?:referred|referenced|mentioned|cited|matched|found)|never (?:referred|referenced|mentioned|cited)"
+        r"|isn't (?:referred|cited|mentioned)|nothing (?:refers|cites|in the text)|unreferenced|uncited|unmatched|unresolved"
+        r"|no (?:caption|matching|entry|reference|in-text|mention|citation)|missing|orphan", re.I)
+    checks_listed = (
+        "the proofread copy is saved beside the original as '<name> - proofread.docx'",
+        "the original is unchanged",
+        "the earlier proofread copy is renamed '<name> - proofread (previous run).docx' with its content intact",
+        "every change is tracked: rejecting all changes restores the original text exactly",
+        "every revision is authored by Claude",
+        "Figure 2 (a caption that nothing refers to) is flagged",
+        "Figure 3 (a cross-reference with no caption) is flagged",
+        "Brown 2015 (a citation with no References entry) is flagged",
+        "Zeta 2010 (a References entry that nothing cites) is flagged",
+        "the correctly matched citations (Smith, Jones and Lee, Kirby et al.) are not flagged as problems",
+        "comments: at most 5, each at most 50 words",
+        "the reply says that the validator ran or that it did not",
+        "the reply says that citation accuracy is not checked (citation-check)",
+        "Word opens the proofread copy without error and reports its revisions",
+    )
+
+    def body(self):
+        cite = CitationCheck._field("Jones, A and Lee, B", "2021", "Tidal asymmetry in estuaries", 7, "(Jones and Lee, 2021)")
+        return [
+            w_para("Introduction"),
+            w_para("Tidal range varies along the estuary (Smith, 2019; Jones and Lee, 2021) and is shown in Figure 1. "
+                   "The mean flow follows the same pattern, as set out in ", w_field("REF _Ref100000001 \\h", "Table 1"),
+                   ". Earlier work by Brown (2015) used a similar approach, and the survey of Kirby et al. (2000) found the "
+                   "same trend. The discharge series is plotted in Figure 3."),
+            w_para("The result agrees with earlier findings ", cite, "."),
+            w_para("Figure ", w_field("SEQ Figure \\* ARABIC", "1"), " – Tidal range along the estuary"),
+            w_para("Figure ", w_field("SEQ Figure \\* ARABIC", "2"), " – Mean flow at the mouth"),
+            w_para('<w:bookmarkStart w:id="1" w:name="_Ref100000001"/>', "Table ", w_field("SEQ Table \\* ARABIC", "1"),
+                   '<w:bookmarkEnd w:id="1"/>', " – Survey dates"),
+            w_para("References"),
+            w_para('<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN EN.REFLIST '
+                   '</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>',
+                   "Jones A and Lee B, 2021, Tidal asymmetry in estuaries, Journal of Coastal Research, 37, 1-10."),
+            w_para("Kirby A, Lee B and Cho C, 2000, Tidal flat shape, Estuarine Science, 12, 100-120."),
+            w_para("Smith J, 2019, Tides and flow, Marine Reports, 5, 20-30."),
+            w_para("Zeta Q, 2010, An unused source, Unused Press.", '<w:r><w:fldChar w:fldCharType="end"/></w:r>'),
+        ]
+
+    def build(self, tmp, args=None):
+        require_word()
+        root = (Path(tmp) / "Structure").resolve()
+        root.mkdir()
+        self.manuscript = root / "Structure Notes.docx"
+        write_minimal_docx(self.manuscript, self.body())
+        marker = root / "Structure Notes - proofread.docx"
+        write_minimal_docx(marker, [w_para("PREVIOUS RUN MARKER")])
+        self.marker_bytes = marker.read_bytes()
+        self.original_text = doc_text(self.manuscript)
+        self.root = root
+        self.before = tree_hashes(root)
+        return root
+
+    def prompt(self, root):
+        return ("Use the proofread skill on 'Structure Notes.docx' in this folder. Scope: the whole document. Do not ask me "
+                "questions. When the skill has finished, give me the path of the proofread copy and the summary.")
+
+    def flagged(self, texts, needle):
+        rx = re.compile(needle, re.I)
+        return any(rx.search(c) and self.PROBLEM.search(c) for text in texts for c in clauses(text))
+
+    def check(self, root, reply, before):
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        c = self.checks_listed
+        copy = root / "Structure Notes - proofread.docx"
+        previous = root / "Structure Notes - proofread (previous run).docx"
+        made = copy.is_file() and copy.read_bytes() != self.marker_bytes
+        add(c[0], made, f"files: {sorted(p.name for p in root.iterdir())}")
+        add(c[1], tree_hashes(root).get("Structure Notes.docx") == before.get("Structure Notes.docx"))
+        add(c[2], previous.is_file() and previous.read_bytes() == self.marker_bytes)
+        if not made:
+            for name in c[3:11]:
+                add(name, False, "no new copy")
+        else:
+            rejected = doc_text(copy, "reject")
+            add(c[3], rejected == self.original_text, "paragraphs differing: "
+                f"{[i for i, (a, b) in enumerate(zip(rejected, self.original_text)) if a != b][:5]}")
+            authors = revision_authors(copy)
+            add(c[4], authors <= {"Claude"}, f"authors: {sorted(authors)}")
+            bodies = comment_bodies(copy)
+            texts = [reply] + bodies
+            add(c[5], self.flagged(texts, r"Figure\s*2"))
+            add(c[6], self.flagged(texts, r"Figure\s*3"))
+            add(c[7], self.flagged(texts, r"Brown"))
+            add(c[8], self.flagged(texts, r"Zeta"))
+            wrong = [t for t in texts for cl in clauses(t) if re.search(r"Smith|Jones|Kirby", cl)
+                     and any(w in cl.lower() for w in ("no entry", "no matching", "unmatched", "not matched", "orphan",
+                                                       "not found", "unresolved", "missing"))]
+            add(c[9], not wrong, f"{len(wrong)} mentions")
+            add(c[10], len(bodies) <= 5 and all(len(b.split()) <= 50 for b in bodies),
+                f"{len(bodies)} comments; words: {[len(b.split()) for b in bodies]}")
+        add(c[11], "validat" in reply.lower())
+        rl = reply.lower()
+        add(c[12], "citation-check" in rl or "citation check" in rl)
+        if not made:
+            add(c[13], False, "no new copy")
+        else:
+            code, text = word_run(
+                "$w = New-Object -ComObject Word.Application; $w.Visible = $false; $w.DisplayAlerts = 0\n"
+                f"try {{ $d = $w.Documents.Open('{copy}', $false, $true); 'revisions=' + $d.Revisions.Count; "
+                "$d.Close($false) }\nfinally { $w.Quit() }\n")
+            m = re.search(r"revisions=(\d+)", text)
+            add(c[13], code == 0 and m is not None, text[:160])
         return out
 
 
@@ -580,11 +768,12 @@ class CitationCheck(TestLibrary, Fixture):
                 f"</authors></contributors><titles><title>{esc(title)}</title></titles>"
                 + (f"<number>{esc(number)}</number>" if number else "") +
                 f"<dates><year>{year}</year></dates></record></Cite></EndNote>")
-        instr = " ADDIN EN.CITE " + esc(cite)
-        half = len(instr) // 2
+        # split the raw text first and escape each half, so that no XML entity is cut in two
+        raw = " ADDIN EN.CITE " + cite
+        half = len(raw) // 2
         return ('<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
-                f'<w:r><w:instrText xml:space="preserve">{instr[:half]}</w:instrText></w:r>'
-                f'<w:r><w:instrText xml:space="preserve">{instr[half:]}</w:instrText></w:r>'
+                f'<w:r><w:instrText xml:space="preserve">{esc(raw[:half])}</w:instrText></w:r>'
+                f'<w:r><w:instrText xml:space="preserve">{esc(raw[half:])}</w:instrText></w:r>'
                 '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
                 f'<w:r><w:t>{esc(display)}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>')
 
@@ -806,8 +995,17 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), CitationCheck(),
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(),
                                       LiteratureSearch(), LiteratureSearchExternal())}
+
+
+def docx_skill_rows():
+    """Rows from scripts/check_docx_skill.py for the live Claude folder: whether the scripts proofread uses are
+    present and unchanged since they were last accepted."""
+    spec = importlib.util.spec_from_file_location("check_docx_skill", REPO / "scripts" / "check_docx_skill.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.lines(mod.inspect(CLAUDE_HOME))
 
 
 def purge(fixture, root, claude):
@@ -825,6 +1023,12 @@ def run_one(fixture, args, out_dir):
     stamp = datetime.now().strftime("%d%m%y-%H%M")
     dest = out_dir / f"{fixture.name}-{stamp}"
     dest.mkdir(parents=True, exist_ok=True)
+    if fixture.uses_docx_skill:
+        rows = docx_skill_rows()
+        (dest / "docx-skill-check.txt").write_text("\n".join(f"{k:5} {x}" for k, x in rows) + "\n", encoding="utf-8")
+        for kind, text in rows:
+            if kind != "OK":
+                print(f"  docx skill {kind}: {text}")
     print(f"[{fixture.name}] project {root}", flush=True)
     started = time.time()
     try:

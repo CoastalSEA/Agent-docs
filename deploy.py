@@ -360,7 +360,7 @@ def render_machine(f, scripts, repo, config, today=None):
              "(whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line) "
              "and `rotate_records.py` (moves the "
              "oldest decision lines to the archive; `--apply` writes). Use the Python and path forms of the "
-             "run control line, with the script name replaced."]
+             "run control line, with the script name replaced. `check_docx_skill.py` takes no `--root`: `--find` prints the folder of the docx skill scripts that the proofread skill calls, and a plain run checks them."]
     for name, path, on_path, label in f["tools"]:
         where = "on `PATH`" if on_path else "not on `PATH`"
         if name == "MATLAB":
@@ -566,9 +566,24 @@ def doctor(target):
     live = target / "CLAUDE.md"
     if live.exists() and "machine.md" not in live.read_text(encoding="utf-8", errors="replace"):
         print("  NOTE     the live CLAUDE.md does not mention machine.md (the old single-file form?)")
+    print("\ndocx skill (used by proofread; shown as a warning only, never a problem):")
+    for kind, text in docx_skill_rows(target):
+        print(f"  {'OK' if kind == 'OK' else 'WARN':<9}{text}")
     print("\nCannot check from here that a session loads the files. Start a session and ask it to quote the Marker lines.")
     print(f"\n{problems} problem(s)." if problems else "\nNo problems found.")
     return 1 if problems else 0
+
+
+def docx_skill_rows(target):
+    """(kind, text) rows from scripts/check_docx_skill.py for the target folder; empty if that script is missing."""
+    path = REPO / "scripts" / "check_docx_skill.py"
+    if not path.is_file():
+        return []
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_docx_skill", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.lines(mod.inspect(target))
 
 
 def main(argv):

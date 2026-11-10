@@ -44,6 +44,7 @@ STATUS = find("wrapup_status.py", "scripts")
 HOOK = find("hook_push_check.py", "scripts")
 GUARD = find("hook_guard.py", "scripts")
 RETENTION = find("log_retention.py", "scripts")
+CHECKDOCX = find("check_docx_skill.py", "scripts")
 CONFIRM = find("hook_confirm.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
@@ -667,6 +668,17 @@ class Deploy(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("NOT FOUND", r.stdout)
 
+    def test_doctor_shows_the_docx_skill_as_a_warning_and_never_as_a_problem(self):
+        rules = self.target / "rules"
+        rules.mkdir(parents=True)
+        (rules / "profile.md").write_text("Marker: profile-file-v1\n\nrule\n", encoding="utf-8")
+        (rules / "machine.md").write_text("Marker: machine-file-v1\n\nnothing to check\n", encoding="utf-8")
+        r = self.dep("doctor")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("docx skill", r.stdout)
+        self.assertRegex(r.stdout, r"WARN\s+the docx skill scripts were not found")
+        self.assertIn("No problems found", r.stdout)
+
 
 class HookPushCheck(Project):
     """The push hook blocks `git push` (exit 2) only while the handoff is stale."""
@@ -979,6 +991,107 @@ class LogRetention(unittest.TestCase):
         r = subprocess.run([sys.executable, "-I", str(RETENTION), "--hook", "--claude-dir", str(self.claude)],
                            input="not json", capture_output=True, text=True)
         self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
+class CheckDocxSkill(unittest.TestCase):
+    """check_docx_skill.py finds the docx skill scripts, checks their interface and watches their fingerprint."""
+    HELP = {"office/validate.py": "usage: validate.py [--original O] [--author A] path",
+            "comment.py": "usage: comment.py [--author A] input text",
+            "merge_runs.py": "usage: merge_runs.py [-o OUTPUT] [--output OUTPUT] input"}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.claude = Path(self.tmp.name) / "claude"
+        self.claude.mkdir()
+
+    def make(self, folder, **overrides):
+        """A fake docx scripts folder. overrides: script name -> help text, or None to leave the script out."""
+        help_text = dict(self.HELP, **overrides)
+        for rel, text in help_text.items():
+            if text is None:
+                continue
+            f = Path(folder) / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("import sys\nif '--help' in sys.argv:\n    print(%r)\n" % text, encoding="utf-8")
+        return Path(folder)
+
+    def synced(self, **overrides):
+        return self.make(self.claude / "skills" / "synced" / "org_user" / "docx" / "scripts", **overrides)
+
+    def run_check(self, *args, env=None):
+        e = {k: v for k, v in os.environ.items() if k != "DOCX_SKILL_DIR"}
+        e.update(env or {})
+        return subprocess.run([sys.executable, "-I", str(CHECKDOCX), "--claude-dir", str(self.claude), *args],
+                              capture_output=True, text=True, env=e)
+
+    def test_version_flag(self):
+        self.assertEqual(run(CHECKDOCX, "--version").stdout.strip(), f"check_docx_skill.py {version_of(CHECKDOCX)}")
+
+    def test_finds_the_synced_folder_and_prints_it(self):
+        folder = self.synced()
+        r = self.run_check("--find")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(Path(r.stdout.strip()).resolve(), folder.resolve())
+
+    def test_finds_other_layouts_and_the_environment_override(self):
+        plain = self.make(self.claude / "skills" / "docx" / "scripts")
+        self.assertEqual(Path(self.run_check("--find").stdout.strip()).resolve(), plain.resolve())
+        extra = self.make(Path(self.tmp.name) / "elsewhere" / "docx" / "scripts")
+        r = self.run_check("--find", "--search-dir", str(Path(self.tmp.name) / "elsewhere"))
+        self.assertEqual(Path(r.stdout.strip()).resolve(), extra.resolve(), "an explicit --search-dir comes first")
+        override = self.make(Path(self.tmp.name) / "override")
+        r = self.run_check("--find", env={"DOCX_SKILL_DIR": str(override)})
+        self.assertEqual(Path(r.stdout.strip()).resolve(), override.resolve())
+        self.assertTrue(extra.is_dir())
+
+    def test_not_found_is_a_failure(self):
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not found", r.stdout)
+        r = self.run_check("--find")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertIn("not found", r.stderr)
+
+    def test_a_folder_with_a_script_missing_is_not_found(self):
+        self.synced(**{"merge_runs.py": None})
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("incomplete folder", r.stdout)
+
+    def test_a_missing_flag_and_a_failing_help_are_reported(self):
+        self.synced(**{"office/validate.py": "usage: validate.py [--original O] path"})
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--author", r.stdout)
+        shutil.rmtree(self.claude / "skills")
+        folder = self.synced()
+        (folder / "comment.py").write_text("raise ModuleNotFoundError(\"No module named 'lxml'\")\n", encoding="utf-8")
+        r = self.run_check()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("lxml", r.stdout)
+        self.assertIn("install the missing package", r.stdout)
+
+    def test_fingerprint_is_recorded_matched_and_a_change_is_a_warning(self):
+        folder = self.synced()
+        r = self.run_check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("no fingerprint recorded", r.stdout)
+        self.assertEqual(self.run_check("--accept").returncode, 0)
+        self.assertTrue((self.claude / "docx-skill.json").is_file())
+        self.assertIn("fingerprint matches", self.run_check().stdout)
+        (folder / "comment.py").write_text((folder / "comment.py").read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+        r = self.run_check()
+        self.assertEqual(r.returncode, 0, "a changed fingerprint is a warning, not a failure")
+        self.assertIn("WARN", r.stdout)
+        self.assertIn("changed since", r.stdout)
+        self.assertEqual(self.run_check("--quiet").stdout.count("OK"), 0)
+
+    def test_accept_is_refused_when_the_interface_check_fails(self):
+        self.synced(**{"comment.py": "usage: comment.py input text"})
+        r = self.run_check("--accept")
+        self.assertEqual(r.returncode, 1)
+        self.assertFalse((self.claude / "docx-skill.json").exists())
 
 
 class DeployHooks(unittest.TestCase):

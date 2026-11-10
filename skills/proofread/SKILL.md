@@ -36,6 +36,7 @@ If the invocation does not say which part of the manuscript to check, ask rather
 
 Use the `docx` skill's own editing workflow for the mechanical part. Do not reinvent XML handling.
 
+- **Locate the `docx` skill scripts first.** Run `check_docx_skill.py --find` (the form is in `machine.md`; it takes no `--root`). It prints the folder that holds `comment.py`, `merge_runs.py` and `office/validate.py`; call the scripts from there. If it prints nothing or fails, search `~/.claude/skills` and the Claude plugin folders for `docx/scripts/office/validate.py`. If the scripts are still not found, say so in the summary (for example "validator not run: docx skill scripts not found") and rely on the Word check alone. Do not skip the validator silently.
 - `merge_runs.py`, `comment.py` and the validator need `defusedxml` and `lxml`. Check that both import before relying on the scripts; if not, install them once (see `machine.md` for how packages are installed) rather than hand-rolling the XML.
 - Unpack, then run `merge_runs.py` so fragmented runs are findable. It does not merge runs whose `rPr` differs, even trivially. An edit or comment anchor that spans several runs needs each run's own `rPr` matched when splitting or wrapping.
 - **Track Changes:** wrap the correction in `<w:ins>`/`<w:del>` (author `"Claude"`, current date, a unique `w:id` for each). When the target sits inside a longer run, split the run at the target's boundaries and keep sibling content (for example a `<w:fldChar>`) in its own untouched run.
@@ -43,7 +44,7 @@ Use the `docx` skill's own editing workflow for the mechanical part. Do not rein
 - When a run has content after the target text and before its own `</w:r>` (for example a `SEQ` or `REF` field), capture everything after the target up to the real closing `</w:r>` and re-emit it unmodified in a continuing run. Taking only the first `<w:t>` silently deletes the trailing content. Do not rely on the validator to catch this afterwards.
 - Use **one shared, safety-checked splitting routine** for every comment and edit, not one-off code per case. Inconsistent one-off code has produced a file that Word rejected as corrupted while the schema validator passed.
 - **Re-zip** with Python's `zipfile` (`ZIP_DEFLATED`, walk the unpacked directory, write each file with a forward-slash relative path). Git Bash has no `zip` command.
-- **Validate** with `validate.py --author "Claude" --original <source>` before treating any edit as done. It catches paragraph-count drift and untracked changes. Set `PYTHONIOENCODING=utf-8` first, or it crashes printing a Unicode arrow on the Windows console.
+- **Validate** with `office/validate.py --author "Claude" --original <source>` (from the folder found above) before treating any edit as done. It catches paragraph-count drift and untracked changes. Set `PYTHONIOENCODING=utf-8` first, or it crashes printing a Unicode arrow on the Windows console.
 - **Verify with Word.** LibreOffice (`soffice`) and pandoc are not installed. Open the produced file read-only through COM; check that `doc.Revisions.Count` and `doc.Comments.Count` match what was intended, each revision's `Author`, `Type` and `Range.Text`, and each comment's `Scope.Text`; confirm that the file opened without a repair prompt (a sign of XML corruption). Schema validation passing is not sufficient: Word enforces stricter consistency than the XSD. This check is mandatory before any multi-comment or multi-edit run is done.
 - Read text straight from `word/document.xml`.
 
@@ -102,7 +103,15 @@ This check is about internal consistency only: does every citation have an entry
 
 `<original-name> - proofread.docx`, saved in the same folder as the original manuscript (not the `outputs/` convention: this document is meant to be opened in Word, not read as a task-output report). If that path already exists, do not overwrite it silently, because a prior run's revisions and comments are real work. Rename the existing file to `<original-name> - proofread (previous run).docx` before writing the new output, and say so in the summary so the user can check whether the earlier findings need keeping or merging.
 
-Give a short summary in the chat response, not inside the document: the document's comments are for substantive editorial feedback only, not a report on the run. Cover the counts of Track Changes edits and Comments (with the comment count against `x_max`), the journal guideline lookup result if one ran (including any blocked fetch or stale-versus-live discrepancy), any unresolved figure, table or citation-matching issue, and the standing note that citation source-verification is out of scope here.
+Give a short summary in the chat response, not inside the document: the document's comments are for substantive editorial feedback only, not a report on the run. Use these seven lines, in this order, and write "none" or "not run" rather than leaving one out:
+
+1. Scope.
+2. Track Changes edits: the count, and what changed.
+3. Comments: the count against `x_max`.
+4. Journal guidelines: the URLs fetched and what each returned (including a blocked fetch or a stale-versus-live discrepancy), or "no journal named".
+5. Figure, table and citation-matching issues: unresolved cross-references, captions that nothing refers to, citations with no References entry, entries that nothing cites, or "none".
+6. Verification: the validator (ran and passed, or not run and why), the Word check, and any other check that did not run and why.
+7. Out of scope: citation source-verification is not done here; use `citation-check`.
 
 ## Checks
 

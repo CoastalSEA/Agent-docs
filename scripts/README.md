@@ -25,6 +25,7 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `hook_guard.py` | Claude Code hook: block writes to `data/` and to listed protected paths |
 | `hook_confirm.py` | Claude Code hook: ask the user before accept, reject, discard, archive or restore |
 | `log_retention.py` | Report session transcripts of a project that will be deleted soon; optional start-of-session notice |
+| `check_docx_skill.py` | Find the `docx` skill scripts that `proofread` uses, check their interface and warn when they change |
 
 ## run_control.py
 
@@ -132,3 +133,17 @@ Claude Code deletes session transcripts older than `cleanupPeriodDays` (default 
 - The period comes from `cleanupPeriodDays` in `~/.claude/settings.json`, then the project `.claude/settings.json` and `settings.local.json`; `--days` overrides it. Transcripts are found under `~/.claude/projects/<project key>/`.
 - A transcript is due when fewer than `--warn-days` days remain (default 14). Age is the time the file was last written; the Claude Code documentation says only "older than". Exit code 1 if any transcript is due; `--list` shows every transcript.
 - With `--hook` it is a `SessionStart` hook: it reads the hook JSON, uses its `cwd`, prints nothing when no transcript is due, and otherwise shows the user a message and tells Claude. Install it with `python deploy.py hooks --retention-notice`. It never fails a session.
+
+## check_docx_skill.py
+
+The `proofread` skill edits Word files with scripts from the `docx` skill (`office/validate.py`, `comment.py`, `merge_runs.py`). That skill is maintained by Anthropic and synced from the claude.ai account, so its folder name is not fixed (`~/.claude/skills/synced/<ids>/docx/`), a later sync can replace it, and it is absent after an API-key or Bedrock sign-in. This script finds it, checks it and watches it for change.
+
+```
+<python> check_docx_skill.py [--find] [--accept] [--claude-dir DIR] [--search-dir DIR ...] [--quiet]
+```
+
+- It takes no `--root`. A plain run prints the folder found, whether each script runs with `--help` and shows the flags `proofread` uses (`validate.py --original --author`, `comment.py --author`, `merge_runs.py --output`), and the fingerprint status. Exit code 1 if the scripts are not found or the interface check fails.
+- `--find` prints only the folder, for use by the `proofread` skill.
+- Search order: the environment variable `DOCX_SKILL_DIR`, each `--search-dir`, `<claude dir>/skills/docx/scripts`, `<claude dir>/skills/synced/*/docx/scripts`, the plugin folders, and, for the default `~/.claude`, the Claude desktop app's skills-plugin folder.
+- Fingerprint: a hash of every `.py` file in the scripts folder. `--accept` records it in `<claude dir>/docx-skill.json` (only if the interface check passes). A later run that finds a different fingerprint prints a warning, and the exit code stays 0. When that happens, re-run the `proofread` fixtures (`tests/skills/run_fixtures.py proofread proofread-structure`), and run `--accept` if they pass.
+- `deploy.py doctor` and the fixture runner both show these rows as warnings.

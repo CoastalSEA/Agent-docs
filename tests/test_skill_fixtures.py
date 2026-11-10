@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -22,6 +24,7 @@ RUNNER = REPO / "tests" / "skills" / "run_fixtures.py"
 spec = importlib.util.spec_from_file_location("run_fixtures", RUNNER)
 rf = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rf)
+w_para, write_minimal_docx = rf.w_para, rf.write_minimal_docx
 
 
 class Base(unittest.TestCase):
@@ -267,7 +270,7 @@ class ProofreadFixture(Base):
                 z.writestr("word/comments.xml", "<w:comments xmlns:w=\"x\">" + body + "</w:comments>")
         return path
 
-    def results(self, reply="Citation accuracy is not checked here; see citation-check."):
+    def results(self, reply="The validator was not run. Citation accuracy is not checked here; see citation-check."):
         return {n: ok for n, ok, _ in self.fx.check(self.root, reply, self.fx.before)}
 
     def test_a_good_proofread_passes_every_check(self):
@@ -292,7 +295,8 @@ class ProofreadFixture(Base):
     def test_missing_copy_changed_original_and_reply(self):
         self.assertFalse(self.results()[self.fx.checks_listed[0]])
         self.corrected()
-        self.assertFalse(self.results("Done.")[self.fx.checks_listed[7]])
+        self.assertFalse(self.results("The validator ran.")[self.fx.checks_listed[7]])
+        self.assertFalse(self.results("Citation-check covers citations.")[self.fx.checks_listed[9]])
         (self.root / "Estuary Notes.docx").write_bytes(b"changed")
         self.assertFalse(self.results()[self.fx.checks_listed[1]])
 
@@ -351,6 +355,9 @@ class CitationCheckFixture(Base):
             cite = tree.find("Cite")
             found.append((cite.findtext("RecNum"), cite.findtext("Year"), cite.find("record/titles").findtext("title")))
         return found
+
+    def test_the_manuscript_is_well_formed_xml(self):
+        ET.fromstring(zipfile.ZipFile(self.fx.manuscript).read("word/document.xml"))
 
     def test_the_manuscript_holds_the_planted_fields(self):
         fields = self.fields()
@@ -601,6 +608,137 @@ class LiteratureSearchExternalFixture(Base):
         self.assertFalse(self.results()[self.fx.checks_listed[7]])
         write_transcript(self.home, self.root, [tool_call("mcp__exa__web_search_exa", query="x")])
         self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+
+class ProofreadStructureFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = (rf.require_word, rf.word_run)
+        rf.require_word = lambda: None
+        rf.word_run = lambda script, timeout=180: (0, "revisions=4")
+        self.addCleanup(lambda: (setattr(rf, "require_word", self.saved[0]), setattr(rf, "word_run", self.saved[1])))
+        self.fx = rf.ProofreadStructure()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", None)
+        self.c = self.fx.checks_listed
+
+    GOOD_REPLY = ("Scope: the whole document. validate.py was not run, because the docx scripts were not found. "
+                  "Figure 2 has a caption that nothing refers to. The text refers to Figure 3, which has no caption. "
+                  "Brown (2015) has no entry in the References. The entry for Zeta, 2010 is an orphan: nothing cites it. "
+                  "The other citations (Smith 2019, Jones and Lee 2021, Kirby et al. 2000) match. "
+                  "Citation accuracy is not checked here; use citation-check.")
+
+    def make_copy(self, authors="Claude", text=None, comments=(), previous=True):
+        """Write the proofread copy and the renamed previous copy as a good run would."""
+        text = self.fx.original_text if text is None else text
+        # one tracked change in the first paragraph: rejecting it gives back "Introduction", accepting it adds a full stop
+        paras = [w_para(f'<w:del w:id="1" w:author="{authors}" w:date="x"><w:r><w:delText>Introduction</w:delText></w:r></w:del>'
+                        f'<w:ins w:id="2" w:author="{authors}" w:date="x"><w:r><w:t>Introduction.</w:t></w:r></w:ins>')]
+        paras += [w_para(t) for t in text[1:]]
+        path = self.root / "Structure Notes - proofread.docx"
+        write_minimal_docx(path, paras)
+        if comments:
+            body = "".join(f'<w:comment w:id="{i}" w:author="Claude"><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:comment>'
+                           for i, c in enumerate(comments))
+            with zipfile.ZipFile(path, "a") as z:
+                z.writestr("word/comments.xml", '<w:comments xmlns:w="x">' + body + "</w:comments>")
+        if previous:
+            (self.root / "Structure Notes - proofread (previous run).docx").write_bytes(self.fx.marker_bytes)
+        return path
+
+    def results(self, reply=None):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, self.GOOD_REPLY if reply is None else reply, self.fx.before)}
+
+    def test_the_manuscript_is_well_formed_xml(self):
+        ET.fromstring(zipfile.ZipFile(self.fx.manuscript).read("word/document.xml"))
+
+    def test_the_manuscript_holds_the_planted_features(self):
+        with zipfile.ZipFile(self.fx.manuscript) as z:
+            xml = z.read("word/document.xml").decode("utf-8")
+        self.assertEqual(xml.count("SEQ Figure"), 2)
+        self.assertEqual(xml.count("SEQ Table"), 1)
+        self.assertEqual(xml.count("REF _Ref100000001"), 1)
+        self.assertEqual(xml.count("ADDIN EN.CITE"), 1)
+        paragraphs = rf.doc_paragraphs(xml)
+        begin = next(i for i, p in enumerate(paragraphs) if "ADDIN EN.REFLIST" in p)
+        end = max(i for i, p in enumerate(paragraphs) if 'fldCharType="end"' in p)
+        self.assertGreater(end - begin, 2, "the References field spans several paragraphs")
+        text = " ".join(self.fx.original_text)
+        for needle in ("Brown (2015)", "Kirby et al. (2000)", "Figure 3", "Zeta Q, 2010", "Smith, 2019"):
+            self.assertIn(needle, text)
+        self.assertEqual(rf.tree_hashes(self.root), self.fx.before)
+        self.assertEqual(len(self.fx.checks_listed), 14)
+
+    def test_a_good_run_passes_every_check(self):
+        self.make_copy()
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_planted_problem_fails_its_check(self):
+        c = self.c
+        self.make_copy()
+        cases = [
+            (self.GOOD_REPLY.replace("Figure 2 has a caption that nothing refers to.", "Figure 2 is fine."), c[5]),
+            (self.GOOD_REPLY.replace("which has no caption", "which is shown"), c[6]),
+            (self.GOOD_REPLY.replace("Brown (2015) has no entry in the References.", "All citations have entries."), c[7]),
+            (self.GOOD_REPLY.replace("is an orphan: nothing cites it", "is fine"), c[8]),
+            (self.GOOD_REPLY + " Smith 2019 has no entry in the References.", c[9]),
+            (self.GOOD_REPLY.replace("validate.py was not run, because the docx scripts were not found.", "Done."), c[11]),
+            (self.GOOD_REPLY.replace("use citation-check", "done"), c[12]),
+        ]
+        for reply, check in cases:
+            self.assertFalse(self.results(reply)[check], check)
+
+    def test_a_flag_in_a_comment_counts_and_a_clause_boundary_separates_findings(self):
+        self.make_copy(comments=["Figure 2 is never referred to in the text."])
+        results = self.results("validator not run. Brown (2015) has no entry; Zeta is an orphan; Figure 3 has no caption. "
+                               "Smith and Jones and Kirby match. See citation-check.")
+        self.assertTrue(results[self.c[5]], "found in a comment")
+        self.assertTrue(results[self.c[9]], "a finding about Brown does not count against Smith")
+
+    def test_copy_rename_original_tracking_authors_comments_and_word(self):
+        c = self.c
+        self.make_copy(previous=False)
+        self.assertFalse(self.results()[c[2]])
+        self.make_copy(authors="Someone")
+        self.assertFalse(self.results()[c[4]])
+        self.make_copy(text=self.fx.original_text[:-1])
+        self.assertFalse(self.results()[c[3]], "text that does not come back on reject-all")
+        self.make_copy(comments=["x"] * 6)
+        self.assertFalse(self.results()[c[10]])
+        self.make_copy(comments=["word " * 51])
+        self.assertFalse(self.results()[c[10]])
+        self.make_copy()
+        rf.word_run = lambda script, timeout=180: (1, "corrupt")
+        self.assertFalse(self.results()[c[13]])
+        (self.root / "Structure Notes.docx").write_bytes(b"changed")
+        self.assertFalse(self.results()[c[1]])
+
+    def test_no_new_copy_fails_the_content_checks(self):
+        (self.root / "Structure Notes - proofread.docx").write_bytes(self.fx.marker_bytes)
+        results = self.results()
+        self.assertFalse(results[self.c[0]])
+        self.assertFalse(results[self.c[3]])
+        self.assertFalse(results[self.c[13]])
+
+    def test_the_fixture_is_skipped_without_word(self):
+        rf.require_word = self.saved[0]
+        saved = rf.word_available
+        rf.word_available = lambda: False
+        try:
+            with self.assertRaises(rf.Skip):
+                rf.ProofreadStructure().build(self.work / "q", None)
+        finally:
+            rf.word_available = saved
+
+
+class DocxSkillReport(Base):
+    def test_the_runner_reports_the_docx_skill_rows_for_the_live_folder(self):
+        rows = rf.docx_skill_rows()
+        self.assertTrue(rows)
+        self.assertTrue(all(kind in ("OK", "WARN", "FAIL") for kind, _ in rows))
+        self.assertTrue(rf.Proofread.uses_docx_skill and rf.ProofreadStructure.uses_docx_skill)
+        self.assertFalse(rf.CitationCheck.uses_docx_skill)
 
 
 if __name__ == "__main__":
