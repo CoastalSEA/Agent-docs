@@ -32,9 +32,23 @@ Deliverables). Keep the description in the frontmatter on one line.
 If the invocation does not name the document, ask. A project can hold several
 drafts and superseded versions: review the one the invocation or the project
 history marks current. State the document and its version, the objective or
-requirements it is tested against (a named file), and the earlier reviews that
-must not be repeated. If there is no objective document, say so, and test the
-document against its own stated purpose.
+requirements it is tested against (a named file), and any earlier reviews of it.
+If there is no objective document, say so, and test the document against its
+own stated purpose.
+
+**Earlier reviews.** The invocation may name earlier reviews of this document,
+or say `earlier reviews: independent`.
+
+- **Earlier reviews named (the default).** Do not open them until your
+  challenges are drafted: your first reads are the document and the objective
+  only, never the same batch as an earlier review. When the challenges are
+  drafted, write their titles as a short list in a message, then read each
+  earlier review in full, with its resolution table, and tag every challenge:
+  **New**; **Repeats `<id>`** (say what this adds, or drop the challenge); or
+  **Contradicts `<id>`** (state both positions and the evidence for each).
+- **`earlier reviews: independent`.** Do not open any earlier review or earlier
+  report on this document. Do not tag. Say in Method that none was read.
+- **None named.** No tags.
 
 ## Steps
 
@@ -62,10 +76,13 @@ document against its own stated purpose.
    that a user of the document would need and cannot find.
 8. **Quantitative content.** Where a claim can be checked by a small
    calculation, a worked example or a synthetic test, do it in a scratch script
-   outside the project and report the result, including null results. Where a
-   check needs the full data or code of an analysis, do not attempt it: name it
-   as a challenge for `analysis-adversary` or, for a process model, give the
-   check to run.
+   in the system temp folder (the output location an argument, or a relative
+   path) and report the result, including null results. Label evidence from
+   your own simulation as a **reviewer simulation**, state what was computed and
+   its set-up, and list the check under Not checked as a candidate for
+   `analysis-adversary`. Where a check needs the full data or code of an
+   analysis, do not attempt it: name it as a challenge for `analysis-adversary`
+   or, for a process model, give the check to run.
 9. **Change nothing. You report; the author decides.**
 
 ## Deliverables
@@ -74,6 +91,11 @@ Return the full report as the response text. Begin it with a line
 `FILE: <deliverable path>` and, directly under it, with the subject and the
 absolute project root filled in:
 `BEFORE SAVING, RUN the run control command in machine.md: start document-adversary-<subject> --root "<project-root>", then save this report into the folder it prints, as document-adversary-report.md. If it refuses, do not save the report anywhere; show the user the message.`
+
+After the report, return each scratch script that supports a number in it as
+text, each under its own line `FILE: <deliverable folder>/code/<script name>`
+followed by the script in a code fence. The invoking session writes them to
+`code/` in the run folder.
 
 The output folder comes from the shared run script (global Outputs rules), run
 for `<project-root>`: the absolute path of the cwd the skill was invoked from,
@@ -91,7 +113,8 @@ folder it prints plus the file name `document-adversary-report.md`.
 **The session that invoked this skill is responsible for taking that returned
 text and writing it.** It has ordinary `Write` access and is not under the
 read-only constraint; only the review is. It runs the `BEFORE SAVING, RUN:`
-command and writes the report into the folder that prints. In a git project
+command and writes the report, and each returned script under `code/`, into the
+folder that prints. In a git project
 with tracked outputs this is `outputs/document-adversary-<subject>/`, with its
 files other than `.md` removed (overwrite the old report); otherwise it is a new
 `outputs/document-adversary-<subject>-<DDMMYY>-run<N>/`. If that folder differs
@@ -112,18 +135,23 @@ The report holds:
 
 1. **Verdict.** Two to five sentences: whether the document meets its objective,
    and the findings that carry the verdict.
-2. **Method.** What was read, what was recomputed, what was not checked (for
-   example, source papers not re-read).
-3. **Challenges.** A numbered list, most severe first, `C1`, `C2` and so on.
+2. **Method.** What was read and what was recomputed. Its first line, always,
+   is `Earlier reviews: read after the challenges were drafted.`, or
+   `Earlier reviews: not read (independent).`, or `Earlier reviews: none named.`
+3. **Challenges.** A numbered list, most severe first, `C1`, `C2` and so on, each
+   tagged New, Repeats or Contradicts where earlier reviews were read.
    Severity: **major** (an objective is not met or a headline claim fails),
    **moderate** (a local error, hidden dependence or avoidable cost),
-   **minor** (wording or reporting). Each challenge has four parts:
-   *Challenge* (one sentence), *Evidence* (the passage, the calculation or the
-   test, with the numbers), *Consequence* (what goes wrong if it stands) and
-   *What would settle it* (the check, the evidence or the decision needed; not
-   an edit to the document).
-4. **Null results.** What was tested and held.
-5. **Not checked.** Stated plainly.
+   **minor** (wording or reporting). Every challenge, minor ones included, has
+   four parts: *Challenge* (one sentence), *Evidence* (the passage, the
+   calculation or the test, with the numbers), *Consequence* (what goes wrong if
+   it stands) and *What would settle it* (the check, the evidence or the decision
+   needed; not an edit to the document).
+4. **Alternatives not ruled out.** From Step 6, with what each would change.
+5. **Numbers the document did not state.** From the recomputations.
+6. **Null results.** What was tested and held.
+7. **Not checked.** Stated plainly, including source papers not re-read and the
+   reviewer simulations that `analysis-adversary` should repeat.
 
 ## Checks
 
@@ -133,7 +161,11 @@ The report holds:
 - The report states at least one number that the document did not state, or
   says that none could be computed and why.
 - Null results are reported, as plainly as findings.
-- No challenge repeats an earlier review named in the invocation.
+- With earlier reviews named, the challenges were drafted before they were
+  read, each challenge is tagged, and none repeats an earlier finding without
+  saying what it adds. With `earlier reviews: independent`, none was opened.
+- Every script that supports a number is returned under a `FILE:` line, and
+  evidence from a reviewer simulation is labelled.
 - No quantitative result is passed or failed without the data. A check that
   needs it is referred to `analysis-adversary`.
 - No clean bill of health when uncertain: name the problem.

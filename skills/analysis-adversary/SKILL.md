@@ -64,6 +64,27 @@ calibrated to data), also state the model version, the calibration data and the
 validation data, and whether the invocation allows the model code to be run
 (see Process-model results).
 
+**Several claims.** If the invocation lists several claims, scope each one, and
+lay the report out as set out before item 1 under Deliverables.
+
+**Earlier reviews.** The invocation may name earlier reviews or reports on this
+result, or say `earlier reviews: independent`.
+
+- **Earlier reviews named (the default).** Do not open them until your findings
+  are drafted: your first reads are the raw inputs and the code only, never the
+  same batch as an earlier review. When the findings are drafted, write their
+  titles as a short list in a message, then read each earlier review in full,
+  with its resolution table, and tag every finding: **New**; **Repeats `<id>`**
+  (say what this adds, or drop it); or **Contradicts `<id>`** (state both
+  positions and the evidence for each).
+- **`earlier reviews: independent`.** Do not open any earlier review or report on
+  this result. Do not tag.
+
+The first line of the report, always, is `Earlier reviews: read after the
+findings were drafted.`, or `Earlier reviews: not read (independent).`, or
+`Earlier reviews: none named.`
+- **None named.** No tags.
+
 **Re-derive independently, and never execute the existing script.** If an
 existing script produced the claimed result, do not re-run it and call that
 reproducing: it only confirms the script is deterministic, and it inherits any
@@ -95,6 +116,9 @@ data. State in the report that data accuracy was out of scope by instruction.
 With no such instruction, the steps below apply as written.
 
 ## Steps
+
+For a process-model result, do the Process-model results section as part of
+these steps, before you write the report, and give its report item 7.
 
 1. **Reproduce the reported outcome independently**, per Scoping. For a negative
    result, reproducing means confirming that the reported search was complete
@@ -204,6 +228,12 @@ invoking session never sees this file, so the returned text must carry the
 instruction):
 `BEFORE SAVING, RUN the run control command in machine.md: start analysis-adversary-<subject> --root "<project-root>", then save this report into the folder it prints, as analysis-adversary-report.md. If it refuses, do not save the report anywhere; show the user the message.`
 
+After the report, return every scratch script that supports a number in it as
+text, each under its own line `FILE: <deliverable folder>/code/<script name>`
+followed by the script in a code fence. Write each script so that the output
+location is an argument or a relative path, so a rerun from the saved folder
+works. The invoking session writes them to `code/` in the run folder.
+
 The output folder comes from the shared run script (global Outputs rules), run
 for `<project-root>`: the absolute path of the cwd the skill was invoked from,
 noted before any other command, because the shell may move later. The task name
@@ -221,7 +251,8 @@ file name `analysis-adversary-report.md`.
 **The session that invoked this skill is responsible for taking that returned
 text and writing it.** It has ordinary `Write` access and is not under the
 read-only constraint; only the review is. It runs the `BEFORE SAVING, RUN:`
-command and writes the report into the folder that prints. In a git project with
+command and writes the report, and each returned script under `code/`, into the
+folder that prints. In a git project with
 tracked outputs this is `outputs/analysis-adversary-<subject>/`, with its files
 other than `.md` removed (overwrite the old report); otherwise it is a new
 `outputs/analysis-adversary-<subject>-<DDMMYY>-run<N>/`. If that folder differs
@@ -238,6 +269,13 @@ back as the command's output and no session is left to save it, so no file is
 written. In that form, save the output yourself. The natural-language form saves
 the file, because the invoking session follows the `FILE:` line. The interactive
 slash form is untested.
+
+With several claims, the report is a table of the claims and their status
+(reproduced, not reproduced, not checked), then one block per claim headed
+`Claim 1`, `Claim 2` and so on, each holding items 1 to 6 and, for a
+process-model claim, item 7 under its own heading **Process-model checks**. The
+items common to all claims (what could not be checked, scripts) come once at
+the end.
 
 The report, whether returned as text or saved, covers:
 
@@ -269,6 +307,12 @@ The report, whether returned as text or saved, covers:
 - The report states at least one number that the author's own write-up did not
   state.
 - Every alternative specification is reported with its own sample size.
+- A comparison made in words (no better than a guess, much larger, negligible)
+  gives both numbers and the base they are measured on.
+- With earlier reviews named, the findings were drafted before they were read and
+  each is tagged; with `earlier reviews: independent`, none was opened.
+- Every script that supports a number is returned under a `FILE:` line, and its
+  output location is an argument or a relative path.
 - When uncertain, the report names a problem rather than issuing a clean bill of
   health, and it ends by naming what it could not check.
 - The review ran in an Explore subagent (a forked execution, or an Agent call

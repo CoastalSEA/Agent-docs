@@ -242,25 +242,66 @@ def dele(text, author="Claude"):
             f'{text}</w:delText></w:r></w:del>')
 
 
+class AdversaryLogHelpers(Base):
+    def test_first_use_times_reads_main_and_subagent_logs(self):
+        root = (self.work / "P").resolve()
+        root.mkdir()
+        folder = self.home / "projects" / rf.project_key(root)
+
+        def call(ts, path):
+            return {"type": "assistant", "timestamp": ts, "message": {"content": [
+                {"type": "tool_use", "name": "Read", "input": {"file_path": path}}]}}
+
+        rf.jsonl(folder / "s1.jsonl", [call("2026-11-10T10:00:00Z", str(root / "docs" / "spec.md"))])
+        rf.jsonl(folder / "s1" / "subagents" / "agent-a.jsonl", [
+            call("2026-11-10T10:05:00Z", str(root / "docs" / "review.md")),
+            call("2026-11-10T10:01:00Z", str(root / "docs" / "spec.md"))])
+        found = rf.first_use_times(root, ["docs/spec.md", "review.md", "absent.md"])
+        self.assertEqual(found["docs/spec.md"], "2026-11-10T10:00:00Z")
+        self.assertEqual(found["review.md"], "2026-11-10T10:05:00Z")
+        self.assertIsNone(found["absent.md"])
+
+    def test_four_parts(self):
+        full = "".join(f"**C{i}.** Challenge. Evidence here. Consequence here. What would settle it: x.\n" for i in (1, 2, 3))
+        self.assertTrue(rf.four_parts(full)[0])
+        self.assertFalse(rf.four_parts(full.replace("What would settle it", "Note", 1))[0])
+        self.assertFalse(rf.four_parts("**C1.** only\n")[0])
+
+
 class DocumentAdversaryFixture(Base):
     def setUp(self):
         super().setUp()
         self.fx = rf.DocumentAdversary()
         self.root = self.fx.build(self.work)
+        self.times = {"docs/spec.md": "10:00", "docs/objective.md": "10:01", "review-v0.9.md": "10:30"}
+        self._orig = rf.first_use_times
+        rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
+        self.addCleanup(setattr, rf, "first_use_times", self._orig)
 
-    def write(self, text):
+    def write(self, text, script=None):
         folder = self.root / "outputs" / "document-adversary-decay-spec-101126-run1"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "document-adversary-report.md").write_text(text, encoding="utf-8")
+        if script:
+            (folder / "code").mkdir(exist_ok=True)
+            (folder / "code" / script).write_text("print(1)", encoding="utf-8")
 
     REPLY = "Saved as document-adversary-report.md. The run is pending review."
+
+    @staticmethod
+    def challenge(n, severity, text):
+        return (f"**C{n} ({severity}).** {text} Challenge stated. Evidence: the passage. Consequence: a wrong run. "
+                f"*What would settle it:* a decision.\n\n")
+
     GOOD = (
-        "# Report\n\n## Verdict\n\nThe specification does not meet R3.\n\n## Challenges\n\n"
-        "**C1 (major).** R3 asks for the uncertainty of k and the specification has none. *What would settle it:* a section.\n\n"
-        "**C2 (moderate).** At k = 0.30 per day the half-life is 2.31 days, not 3.5 days. *What would settle it:* a correction.\n\n"
-        "**C3 (minor).** Ten samples of one per day cannot cover 20 days. *What would settle it:* the true run length.\n\n"
-        "**C4 (moderate).** The background is fixed at zero and not tested. *What would settle it:* a fit with an offset.\n\n"
-        "The claim of 1 per cent recovery needs data: refer it to analysis-adversary.\n\n"
+        "# Report\n\n## Verdict\n\nThe specification does not meet R3.\n\n## Method\n\nThe earlier review was read after "
+        "the challenges were drafted.\n\n## Challenges\n\n"
+        + challenge.__func__(1, "major", "R3 asks for the uncertainty of k and the specification has none. New.")
+        + challenge.__func__(2, "moderate", "At k = 0.30 per day the half-life is 2.31 days, not 3.5 days. Contradicts E3.")
+        + challenge.__func__(3, "minor", "Ten samples of one per day cannot cover 20 days. New.")
+        + challenge.__func__(4, "moderate", "The background is fixed at zero and not tested. Repeats E2; adds a fit with an offset.")
+        + "The claim of 1 per cent recovery needs data: refer it to analysis-adversary.\n\n"
+        "## Alternatives not ruled out\n\nPool the profiles.\n\n## Numbers the document did not state\n\nHalf-life 2.31 days.\n\n"
         "## Null results\n\nThe 0.0125 per hour conversion holds.\n\n## Not checked\n\nSource papers.\n")
 
     def results(self, reply=None):
@@ -274,6 +315,10 @@ class DocumentAdversaryFixture(Base):
         self.assertIn("Ten samples", spec)
         self.assertNotIn("uncertaint", spec.lower())
         self.assertIn("R3", (self.root / "docs" / "objective.md").read_text(encoding="utf-8"))
+        earlier = (self.root / "docs" / "review-v0.9.md").read_text(encoding="utf-8")
+        self.assertIn("E2", earlier)
+        self.assertIn("3.5 days", earlier)
+        self.assertIn("review-v0.9.md", self.fx.prompt(self.root))
 
     def test_a_good_report_passes_every_check(self):
         self.write(self.GOOD)
@@ -290,10 +335,28 @@ class DocumentAdversaryFixture(Base):
             (self.GOOD.replace("What would settle it", "Note"), 6),
             (self.GOOD.replace("## Not checked", "## Other").replace("Source papers.", ""), 7),
             (self.GOOD + "\n**C5 (minor).** The 0.0125 per hour value is wrong.\n", 8),
+            (self.GOOD.replace("after the challenges were drafted", "at the start"), 12),
+            (self.GOOD.replace("Repeats E2", "New"), 13),
+            (self.GOOD + "The sampling interval is not stated.\n", 13),
+            (self.GOOD.replace("Contradicts E3", "New"), 14),
+            (self.GOOD.replace("Consequence", "Result", 1), 15),
+            (self.GOOD.replace("## Alternatives not ruled out", "## Other"), 16),
+            (self.GOOD.replace("## Numbers the document did not state", "## Other"), 16),
+            (self.GOOD + "The check is in scratch.py.\n", 17),
         ]
         for text, i in cases:
             self.write(text)
-            self.assertFalse(self.results()[self.fx.checks_listed[i]], self.fx.checks_listed[i])
+            self.assertFalse(self.results()[self.fx.checks_listed[i]], (i, self.fx.checks_listed[i]))
+
+    def test_reading_order_and_saved_scripts(self):
+        self.write(self.GOOD)
+        self.times["review-v0.9.md"] = "09:00"
+        self.assertFalse(self.results()[self.fx.checks_listed[11]])
+        self.times["review-v0.9.md"] = None
+        self.assertFalse(self.results()[self.fx.checks_listed[11]])
+        self.times["review-v0.9.md"] = "10:30"
+        self.write(self.GOOD + "The check is in scratch.py.\n", script="scratch.py")
+        self.assertTrue(self.results()[self.fx.checks_listed[17]])
 
     def test_missing_report_changed_file_and_reply(self):
         self.assertFalse(self.results()[self.fx.checks_listed[0]])
@@ -304,32 +367,91 @@ class DocumentAdversaryFixture(Base):
         self.assertFalse(self.results()[self.fx.checks_listed[9]])
 
 
+class DocumentAdversaryIndependentFixture(DocumentAdversaryFixture):
+    def setUp(self):
+        super().setUp()
+        self.fx = rf.DocumentAdversaryIndependent()
+        self.root = self.fx.build(self.work / "ind")
+        self.times = {}
+
+    GOOD = DocumentAdversaryFixture.GOOD.replace("The earlier review was read after the challenges were drafted.",
+                                                 "No earlier review was read: the review was independent.") \
+        .replace(" Contradicts E3.", "").replace(" Repeats E2; adds a fit with an offset.", "")
+
+    def test_the_planted_faults_are_in_the_fixture(self):
+        self.assertIn("earlier reviews: independent", self.fx.prompt(self.root))
+
+    def test_each_planted_problem_fails_its_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        cases = [
+            (self.GOOD.replace("No earlier review was read: the review was independent.", "Done."), 12),
+            (self.GOOD + "C9 Repeats E2 (new text).\n", 13),
+            (self.GOOD.replace("Consequence", "Result", 1), 14),
+        ]
+        for text, i in cases:
+            self.write(text)
+            self.assertFalse(self.results()[self.fx.checks_listed[i]], (i, self.fx.checks_listed[i]))
+        self.write(self.GOOD)
+        self.times["review-v0.9.md"] = "10:30"
+        self.assertFalse(self.results()[self.fx.checks_listed[11]])
+
+    def test_a_good_report_passes_every_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_reading_order_and_saved_scripts(self):
+        self.assertEqual(len(self.fx.checks_listed), 15)
+
+    def test_missing_report_changed_file_and_reply(self):
+        self.assertFalse(self.results()[self.fx.checks_listed[0]])
+
+
 class AnalysisAdversaryModelFixture(Base):
     def setUp(self):
         super().setUp()
         self.fx = rf.AnalysisAdversaryModel()
         self.root = self.fx.build(self.work)
+        self.times = {"data/obs.csv": "10:00", "code/model.py": "10:01", "earlier-review.md": "10:30"}
+        self._orig = rf.first_use_times
+        rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
+        self.addCleanup(setattr, rf, "first_use_times", self._orig)
 
-    def write(self, text):
+    def write(self, text, script="repro.py", content="import sys\nout = sys.argv[1]\n"):
         folder = self.root / "outputs" / "analysis-adversary-relaxation-rate-101126-run1"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "analysis-adversary-report.md").write_text(text, encoding="utf-8")
+        if script:
+            (folder / "code").mkdir(exist_ok=True)
+            (folder / "code" / script).write_text(content, encoding="utf-8")
 
     REPLY = "Saved as analysis-adversary-report.md. The run is pending review."
     GOOD = (
-        "# Report\n\nThe reported 0.160 reproduces with the exponent fixed at 0.5. With the exponent freed the fit gives an "
-        "exponent of 1.00 and lam = 0.100 per day.\n\nThe calibration used all the data and no data were held out for "
-        "validation. A persistence baseline was not stated.\n\n## 7. Process-model checks\n\nSensitivity swept.\n")
+        "# Report\n\n| Claim | Status |\n|---|---|\n| 1 | reproduced |\n| 2 | not reproduced |\n\n"
+        "The earlier review was read after the findings were drafted.\n\n"
+        "## Claim 1\n\nThe reported 0.160 reproduces with the exponent fixed at 0.5. With the exponent freed the fit gives an "
+        "exponent of 1.00 and lam = 0.100 per day. F2 Repeats the open finding; it adds the split detail. F1 Contradicts: the rate "
+        "falls from 0.160 to 0.100.\n\n"
+        "The calibration used all the data and no data were held out for validation. A persistence baseline was not stated.\n\n"
+        "## Claim 2\n\nThe RMSE of 0.468 is 0.49 of the standard deviation of y (0.954).\n\n"
+        "## 7. Process-model checks\n\nSensitivity swept.\n")
 
     def results(self, reply=None):
         return {n: ok for n, ok, _ in self.fx.check(self.root, self.REPLY if reply is None else reply, self.fx.before)}
 
     def test_the_planted_bias_is_in_the_fixture(self):
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         out = subprocess.run([sys.executable, "-I", "code/model.py"], cwd=self.root, capture_output=True, text=True)
         self.assertIn("lam = 0.160", out.stdout)
         rows = [ln.split(",") for ln in (self.root / "data" / "obs.csv").read_text(encoding="utf-8").splitlines()[1:]]
         self.assertEqual(len(rows), self.fx.N)
+        ys = [float(r[2]) for r in rows]
+        mean = sum(ys) / len(ys)
+        sd = math.sqrt(sum((v - mean) ** 2 for v in ys) / len(ys))
+        self.assertAlmostEqual(sd, 0.954, delta=0.01)
+        self.assertIn("earlier-review.md", self.fx.prompt(self.root))
+        self.assertTrue((self.root / "docs" / "earlier-review.md").is_file())
 
     def test_a_good_report_passes_every_check(self):
         self.write(self.GOOD)
@@ -343,10 +465,27 @@ class AnalysisAdversaryModelFixture(Base):
             (self.GOOD.replace("all the data", "some data").replace("no data were held out", "a split was made"), 3),
             (self.GOOD.replace("persistence baseline", "comparison"), 4),
             (self.GOOD.replace("Process-model checks", "Other"), 5),
+            (self.GOOD.replace("| 1 | reproduced |", "").replace("Claim 2", "Item"), 9),
+            (self.GOOD.replace("after the findings were drafted", "at the start"), 11),
+            (self.GOOD.replace("F2 Repeats", "F2"), 12),
+            (self.GOOD.replace("F1 Contradicts", "F1"), 12),
+            (self.GOOD.replace("(0.954)", "").replace("0.468", "the model RMSE"), 13),
         ]
         for text, i in cases:
             self.write(text)
-            self.assertFalse(self.results()[self.fx.checks_listed[i]], self.fx.checks_listed[i])
+            self.assertFalse(self.results()[self.fx.checks_listed[i]], (i, self.fx.checks_listed[i]))
+
+    def test_order_and_scripts(self):
+        self.write(self.GOOD)
+        self.times["earlier-review.md"] = "09:00"
+        self.assertFalse(self.results()[self.fx.checks_listed[10]])
+        self.times["earlier-review.md"] = "10:30"
+        self.write(self.GOOD, script="repro.py", content="print(1)\n")
+        self.assertTrue(self.results()[self.fx.checks_listed[14]])
+        self.write(self.GOOD, script="repro.py", content="open('C:\\\\Temp\\\\scratch\\\\out.csv', 'w')\n")
+        self.assertFalse(self.results()[self.fx.checks_listed[14]])
+        self.write(self.GOOD, script=None)
+        self.assertFalse(self.results()[self.fx.checks_listed[14]])
 
     def test_missing_report_changed_file_and_reply(self):
         self.assertFalse(self.results()[self.fx.checks_listed[0]])
@@ -354,6 +493,44 @@ class AnalysisAdversaryModelFixture(Base):
         self.assertFalse(self.results("The run is pending review.")[self.fx.checks_listed[8]])
         (self.root / "draft.md").write_text("changed", encoding="utf-8")
         self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+
+class AnalysisAdversaryIndependentFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.fx = rf.AnalysisAdversaryIndependent()
+        self.root = self.fx.build(self.work)
+        self.times = {}
+        self._orig = rf.first_use_times
+        rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
+        self.addCleanup(setattr, rf, "first_use_times", self._orig)
+
+    def write(self, text):
+        folder = self.root / "outputs" / "analysis-adversary-relaxation-rate-101126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "analysis-adversary-report.md").write_text(text, encoding="utf-8")
+
+    GOOD = ("# Report\n\nNo earlier review was read: the review was independent.\n\n"
+            "The reported 0.160 reproduces with the exponent fixed at 0.5. With the exponent freed the fit gives an exponent of "
+            "1.00 and lam = 0.100 per day. The calibration used all the data and no data were held out for validation. A "
+            "persistence baseline was not stated.\n\n## 7. Process-model checks\n\nSensitivity swept.\n")
+
+    def results(self):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, "Saved as analysis-adversary-report.md; pending review.",
+                                                    self.fx.before)}
+
+    def test_good_and_each_fault(self):
+        self.assertIn("earlier reviews: independent", self.fx.prompt(self.root))
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+        self.write(self.GOOD.replace("No earlier review was read: the review was independent.", "Done."))
+        self.assertFalse(self.results()[self.fx.checks_listed[10]])
+        self.write(self.GOOD + "F2 Repeats the open finding.\n")
+        self.assertFalse(self.results()[self.fx.checks_listed[11]])
+        self.write(self.GOOD)
+        self.times["earlier-review.md"] = "10:00"
+        self.assertFalse(self.results()[self.fx.checks_listed[9]])
 
 
 class TrackedChangeText(unittest.TestCase):

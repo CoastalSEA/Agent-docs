@@ -15,7 +15,7 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
                                            [--estuary-doc PATH] [--test-library PATH] [--external]
   skill      project-disclosure, project-disclosure-detailed, analysis-adversary, analysis-adversary-model,
-             document-adversary, proofread, proofread-structure, citation-check,
+             analysis-adversary-independent, document-adversary, document-adversary-independent, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
              (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
@@ -40,6 +40,7 @@ Exit:    0 if every check of every fixture that ran passed (a skipped fixture is
 Version: see VERSION; `--version` prints it.
 """
 import argparse
+import glob
 import hashlib
 import html
 import importlib.util
@@ -370,6 +371,46 @@ print(f"k = {-slope:.3f} per day")
         return out
 
 
+def first_use_times(root, needles):
+    """{needle: earliest timestamp of a tool call whose input contains the needle, or None}.
+
+    Reads every session and subagent log of the fixture project, so it sees what a forked skill did."""
+    found = {n: None for n in needles}
+    for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                content = (e.get("message") or {}).get("content")
+                if e.get("type") != "assistant" or not isinstance(content, list):
+                    continue
+                for item in content:
+                    if (isinstance(item, dict) and item.get("type") == "tool_use"
+                            and item.get("name") in ("Read", "Bash", "Grep", "Glob", "PowerShell")):
+                        text = json.dumps(item.get("input", {})).replace("\\\\", "/")
+                        for n in needles:
+                            if n in text and (found[n] is None or e.get("timestamp", "") < found[n]):
+                                found[n] = e.get("timestamp", "")
+    return found
+
+
+def four_parts(t):
+    """(ok, detail): every numbered challenge has an evidence, consequence and what-would-settle-it part."""
+    ids = set(re.findall(r"^\W*C(\d+)\b", t, re.M))
+    n = len(ids)
+    counts = {p: len(re.findall(p, t, re.I)) for p in (r"\bevidence\b", r"\bconsequence\b", r"what would settle it")}
+    return n >= 3 and all(c >= n for c in counts.values()), f"challenges {n}; part counts {list(counts.values())}"
+
+
+def run_scripts(root, task_prefix):
+    """The files saved under code/ in the run folder of the task."""
+    out = root / "outputs"
+    folders = sorted(out.glob(task_prefix + "*")) if out.is_dir() else []
+    return [p for f in folders for p in (f / "code").rglob("*") if p.is_file()] if folders else []
+
+
 class DocumentAdversary(Fixture):
     name = "document-adversary"
     checks_listed = (
@@ -384,7 +425,15 @@ class DocumentAdversary(Fixture):
         "the correct hourly conversion 0.0125 is not reported as an error",
         "the project files are unchanged",
         "the reply gives the saved path and reports the run as pending",
+        "the earlier review was opened only after the specification and the objective were read",
+        "the report says the earlier review was read after the challenges were drafted",
+        "the open earlier finding E2 (zero baseline) is tagged as a repeat and the resolved E1 is not raised",
+        "the earlier null result E3 (half-life 3.5 days) is tagged as contradicted",
+        "every challenge has evidence, consequence and what-would-settle-it parts",
+        "the report has an alternatives section and a section of numbers the document did not state",
+        "any script the report cites is saved under code/ in the run folder",
     )
+    n_core = 11
 
     OBJECTIVE = (
         "# Objective: decay-rate estimator\n\n"
@@ -408,21 +457,53 @@ class DocumentAdversary(Fixture):
         "The method recovers k to within 1 per cent.\n\n"
         "## 6. Reporting\n\n"
         "The estimate of k and the half-life are reported with the run date.\n")
+    EARLIER = (
+        "# Review of version 0.9 of the decay-rate estimator specification\n\n"
+        "## Findings\n\n"
+        "- E1. The sampling interval is not stated. Status: resolved in version 1.0 (section 2).\n"
+        "- E2. The background level is fixed at zero with no test. Status: open.\n\n"
+        "## Null results\n\n"
+        "- E3. The half-life of 3.5 days at k = 0.30 per day was checked and holds.\n")
 
     def build(self, tmp, args=None):
         root = (Path(tmp) / "Spec").resolve()
         (root / "docs").mkdir(parents=True)
         (root / "docs" / "objective.md").write_text(self.OBJECTIVE, encoding="utf-8")
         (root / "docs" / "spec.md").write_text(self.SPEC, encoding="utf-8")
+        (root / "docs" / "review-v0.9.md").write_text(self.EARLIER, encoding="utf-8")
         self.root = root
         self.before = tree_hashes(root)
         return root
 
+    EARLIER_LINE = "Earlier review: docs/review-v0.9.md."
+
     def prompt(self, root):
         return (f"Use the document-adversary skill to try to break the specification docs/spec.md (version 1.0). "
-                f"Objective: docs/objective.md. No earlier reviews. Subject: decay-spec. Project root: {root}. "
-                f"When the skill has returned, save its report as the skill instructs, tell me the path and say "
-                f"whether the run is pending review.")
+                f"Objective: docs/objective.md. {self.EARLIER_LINE} Subject: decay-spec. Project root: {root}. "
+                f"When the skill has returned, save its report and any scripts as the skill instructs, tell me the "
+                f"path and say whether the run is pending review.")
+
+    def extra(self, root, t, text, reply):
+        out = []
+        times = first_use_times(root, ["docs/spec.md", "docs/objective.md", "review-v0.9.md"])
+        spec, obj, rev = times["docs/spec.md"], times["docs/objective.md"], times["review-v0.9.md"]
+        ordered = rev is not None and spec is not None and obj is not None and rev > spec and rev > obj
+        out.append((self.checks_listed[11], ordered, f"first use: spec {spec}, objective {obj}, review {rev}"))
+        out.append((self.checks_listed[12], re.search(r"(earlier|previous|prior)[^.\n]{0,80}(read|opened)[^.\n]{0,80}after|"
+                                                      r"after[^.\n]{0,100}(drafted|written|wrote)[^.\n]{0,80}(earlier|previous|prior|review)",
+                                                      t, re.I) is not None, ""))
+        repeat = re.search(r"repeat\w*[^\n]{0,40}\bE2\b|\bE2\b[^\n]{0,80}repeat", t, re.I) is not None
+        raised = re.search(r"interval[^.\n]{0,60}(not stated|missing|undefined|unstated)", t, re.I) is not None
+        out.append((self.checks_listed[13], repeat and not raised, f"repeat tag {repeat}; E1 raised {raised}"))
+        out.append((self.checks_listed[14], re.search(r"contradict\w*[^\n]{0,40}\bE3\b|\bE3\b[^\n]{0,80}contradict", t, re.I) is not None, ""))
+        ok, detail = four_parts(t)
+        out.append((self.checks_listed[15], ok, detail))
+        out.append((self.checks_listed[16], re.search(r"^#+ .*alternativ", t, re.I | re.M) is not None
+                    and re.search(r"^#+ .*(did not state|not stated|unstated)", t, re.I | re.M) is not None, ""))
+        cited = re.search(r"\.py\b|scratch script", t, re.I) is not None
+        saved = run_scripts(root, "document-adversary")
+        out.append((self.checks_listed[17], not cited or bool(saved), f"script cited {cited}; saved {[p.name for p in saved]}"))
+        return out
 
     def check(self, root, reply, before):
         text = self.result_text(root, "document-adversary-report.md")
@@ -450,6 +531,28 @@ class DocumentAdversary(Fixture):
         add(self.checks_listed[9], tree_hashes(root) == before)
         add(self.checks_listed[10], text is not None and "document-adversary-report.md" in reply and "pending" in reply.lower()
             and "accepted the run" not in reply.lower())
+        out.extend(self.extra(root, t, text, reply))
+        return out
+
+
+class DocumentAdversaryIndependent(DocumentAdversary):
+    name = "document-adversary-independent"
+    checks_listed = DocumentAdversary.checks_listed[:11] + (
+        "the earlier review file was never opened",
+        "the report says that no earlier review was read",
+        "no challenge is tagged as a repeat of or contradiction of an earlier finding",
+        "every challenge has evidence, consequence and what-would-settle-it parts",
+    )
+    EARLIER_LINE = "earlier reviews: independent."
+
+    def extra(self, root, t, text, reply):
+        rev = first_use_times(root, ["review-v0.9.md"])["review-v0.9.md"]
+        out = [(self.checks_listed[11], rev is None, f"first use of the review file: {rev}"),
+               (self.checks_listed[12], re.search(r"(no|not|none|never)[^.\n]{0,80}(earlier|previous|prior)?[^.\n]{0,40}(review|report)s?[^.\n]{0,40}"
+                                                  r"(read|opened)|independent", t, re.I) is not None, ""),
+               (self.checks_listed[13], re.search(r"(repeats?|contradicts?)\W{0,4}E\d|E\d\b[^\n]{0,80}(repeat|contradict)", t, re.I) is None, "")]
+        ok, detail = four_parts(t)
+        out.append((self.checks_listed[14], ok, detail))
         return out
 
 
@@ -466,7 +569,14 @@ class AnalysisAdversaryModel(Fixture):
         "the model code under review was not run",
         "the project files are unchanged",
         "the reply gives the saved path and reports the run as pending",
+        "the report starts with a table of the two claims and a block for each",
+        "the earlier review was opened only after the data and the model code were read",
+        "the report says the earlier review was read after the findings were drafted",
+        "the open earlier finding F2 (no validation split) is tagged as a repeat; F1 (rate insensitive to the exponent) as contradicted",
+        "the comparison with the standard deviation of y gives both numbers",
+        "the scripts are saved under code/ in the run folder and take their output location from an argument or a relative path",
     )
+    EARLIER_LINE = "Earlier review: docs/earlier-review.md."
 
     MODEL = (
         '"""Relaxation model y(t+1) = y(t) + lam (c h(t)**(-p) - y(t)); calibrate lam and c on all rows of data/obs.csv."""\n'
@@ -491,6 +601,11 @@ class AnalysisAdversaryModel(Fixture):
         "    if best is None or rmse < best[2]:\n"
         "        best = (lam, c, rmse)\n"
         "print('lam = %.3f per day, c = %.3f, rmse = %.3f' % best)\n")
+    EARLIER = (
+        "# Earlier review of the relaxation model\n\n"
+        "## Findings\n\n"
+        "- F1. The calibrated rate of 0.160 per day is not sensitive to the exponent. Status: stated by the author.\n"
+        "- F2. The calibration used all the data and no validation split was made. Status: open.\n")
 
     @staticmethod
     def _simulate(lam, c, p, h, y0):
@@ -513,26 +628,52 @@ class AnalysisAdversaryModel(Fixture):
         root = (Path(tmp) / "Relax").resolve()
         (root / "data").mkdir(parents=True)
         (root / "code").mkdir()
+        (root / "docs").mkdir()
         (root / "data" / "obs.csv").write_text(
             "day,h,y\n" + "".join(f"{i},{a:.5f},{b:.5f}\n" for i, (a, b) in enumerate(zip(h, y))), encoding="utf-8")
         (root / "code" / "model.py").write_text(self.MODEL, encoding="utf-8")
+        (root / "docs" / "earlier-review.md").write_text(self.EARLIER, encoding="utf-8")
         (root / "draft.md").write_text(
             "# Relaxation model\n\nThe model y(t+1) = y(t) + lam (c h(t)^(-0.5) - y(t)) was calibrated on data/obs.csv "
             "(all 150 days, code/model.py). The calibrated relaxation rate is lam = 0.160 per day, and the model fits "
-            "the observations.\n", encoding="utf-8")
+            "the observations with an error far smaller than the standard deviation of y.\n", encoding="utf-8")
         self.root = root
         self.before = tree_hashes(root)
         return root
 
     def prompt(self, root):
-        return (f"Use the analysis-adversary skill to try to break this result: the calibrated relaxation rate "
-                f"lam = 0.160 per day from the process model in code/model.py, reported in draft.md. Subject: "
-                f"relaxation-rate. Raw input: data/obs.csv. Code: code/model.py. The model code may not be run. "
-                f"Project root: {root}. When the skill has returned, save its report as the skill instructs, tell me "
-                f"the path and say whether the run is pending review.")
+        return (f"Use the analysis-adversary skill to try to break these two claims about the process model in "
+                f"code/model.py, reported in draft.md: (1) the calibrated relaxation rate is lam = 0.160 per day; "
+                f"(2) the model fits the observations with an error far smaller than the standard deviation of y. "
+                f"Subject: relaxation-rate. Raw input: data/obs.csv. Code: code/model.py. The model code may not be "
+                f"run. {self.EARLIER_LINE} Project root: {root}. When the skill has returned, save its report and any "
+                f"scripts as the skill instructs, tell me the path and say whether the run is pending review.")
+
+    def extra(self, root, t, text, reply):
+        out = []
+        times = first_use_times(root, ["data/obs.csv", "code/model.py", "earlier-review.md"])
+        obs, mod, rev = times["data/obs.csv"], times["code/model.py"], times["earlier-review.md"]
+        ordered = rev is not None and obs is not None and mod is not None and rev > obs and rev > mod
+        out.append((self.checks_listed[10], ordered, f"first use: data {obs}, model {mod}, review {rev}"))
+        out.append((self.checks_listed[11], re.search(r"(earlier|previous|prior)[^.\n]{0,80}(read|opened)[^.\n]{0,80}after|"
+                                                      r"after[^.\n]{0,100}(drafted|written|wrote)[^.\n]{0,80}(earlier|previous|prior|review)",
+                                                      t, re.I) is not None, ""))
+        repeat = re.search(r"repeat\w*[^\n]{0,40}\bF2\b|\bF2\b[^\n]{0,80}repeat", t, re.I) is not None
+        contra = re.search(r"contradict\w*[^\n]{0,40}\bF1\b|\bF1\b[^\n]{0,80}contradict", t, re.I) is not None
+        out.append((self.checks_listed[12], repeat and contra, f"F2 repeat {repeat}; F1 contradicted {contra}"))
+        both = [ln.strip()[:120] for ln in t.splitlines()
+                if re.search(r"standard deviation|\bSD\b|\bs\.d\.|constant|mean", ln, re.I)
+                and re.search(r"\b0\.9[3-6]\d*\b", ln) and re.search(r"\b0\.4[5-9]\d*\b", ln)]
+        out.append((self.checks_listed[13], bool(both), f"lines with both numbers: {both[:1]}"))
+        return out
+
+    def extra_scripts(self, root):
+        saved = [p for p in run_scripts(root, "analysis-adversary") if p.suffix == ".py"]
+        absolute = [p.name for p in saved
+                    if re.search(r"[A-Za-z]:[\\/]|['\"]/(tmp|home|Users|c)/", p.read_text(encoding="utf-8", errors="replace"))]
+        return (bool(saved) and not absolute, f"scripts {[p.name for p in saved]}; with an absolute path {absolute}")
 
     def check(self, root, reply, before):
-        import glob
         text = self.result_text(root, "analysis-adversary-report.md")
         t = text or ""
         out = []
@@ -562,7 +703,37 @@ class AnalysisAdversaryModel(Fixture):
         add(self.checks_listed[7], tree_hashes(root) == before)
         add(self.checks_listed[8], text is not None and "analysis-adversary-report.md" in reply and "pending" in reply.lower()
             and "accepted the run" not in reply.lower())
+        head = t[:4000]
+        add(self.checks_listed[9], re.search(r"^\|.*(reproduc|not checked|confirmed|holds)", head, re.I | re.M)
+            and re.search(r"claim\W{0,3}1", t, re.I) and re.search(r"claim\W{0,3}2", t, re.I))
+        out.extend(self.extra(root, t, text, reply))
+        if len(self.checks_listed) > 14:
+            ok, detail = self.extra_scripts(root)
+            out.append((self.checks_listed[14], ok, detail))
         return out
+
+
+class AnalysisAdversaryIndependent(AnalysisAdversaryModel):
+    name = "analysis-adversary-independent"
+    checks_listed = AnalysisAdversaryModel.checks_listed[:9] + (
+        "the earlier review file was never opened",
+        "the report says that no earlier review was read",
+        "no finding is tagged as a repeat of or contradiction of an earlier finding",
+    )
+    EARLIER_LINE = "earlier reviews: independent."
+
+    def extra(self, root, t, text, reply):
+        return []
+
+    def check(self, root, reply, before):
+        base = AnalysisAdversaryModel.check(self, root, reply, before)[:9]
+        t = self.result_text(root, "analysis-adversary-report.md") or ""
+        rev = first_use_times(root, ["earlier-review.md"])["earlier-review.md"]
+        base.append((self.checks_listed[9], rev is None, f"first use of the review file: {rev}"))
+        base.append((self.checks_listed[10], re.search(r"(no|not|none|never)[^.\n]{0,80}(review|report)s?[^.\n]{0,40}(read|opened)|"
+                                                       r"independent", t, re.I) is not None, ""))
+        base.append((self.checks_listed[11], re.search(r"(repeats?|contradicts?)\W{0,4}F\d|F\d\b[^\n]{0,80}(repeat|contradict)", t, re.I) is None, ""))
+        return base
 
 
 class Skip(Exception):
@@ -1543,7 +1714,7 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), ProjectDisclosureDetailed(), AnalysisAdversary(), AnalysisAdversaryModel(), DocumentAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), ProjectDisclosureDetailed(), AnalysisAdversary(), AnalysisAdversaryModel(), AnalysisAdversaryIndependent(), DocumentAdversary(), DocumentAdversaryIndependent(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
                                       LiteratureSearch(), LiteratureSearchExternal())}
 
 
