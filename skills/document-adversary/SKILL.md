@@ -103,9 +103,10 @@ control `accept`, `reject` or `discard` command is run for the task. Do not drop
 this handoff: if you are the invoking session receiving the returned text, save
 it before considering the task done.
 
-When the skill is started by a literal slash command at the top level of a
-non-interactive `claude -p` session, no session is left to save the report, so
-no file is written. In that form, save the output yourself.
+**Known gap.** When the skill is started by a literal slash command at the top
+level of a non-interactive `claude -p` session, no session is left to save the
+report, so no file is written. In that form, save the output yourself. The
+interactive slash form is untested.
 
 The report holds:
 
