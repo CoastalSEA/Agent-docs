@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 LEVELS = ("minimal", "handoff", "full")
 LEVEL_FILES = {
     "minimal": ["CLAUDE.md"],
@@ -255,6 +255,8 @@ def init(root, level, templates, apply):
             text = f.read_text(encoding="utf-8") if f.is_file() else ""
             block = []
             for comments, line in ignore:
+                if block and comments:
+                    block.append("")
                 block += comments + [line]
             f.write_text(text + ("" if not text or text.endswith("\n") else "\n") + ("\n" if text else "")
                          + "\n".join(block) + "\n", encoding="utf-8", newline="")
