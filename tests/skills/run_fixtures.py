@@ -14,7 +14,8 @@ folder names made from the temporary project path, and removes them afterwards.
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
                                            [--estuary-doc PATH] [--test-library PATH] [--external]
-  skill      project-disclosure, project-disclosure-detailed, analysis-adversary, proofread, proofread-structure, citation-check,
+  skill      project-disclosure, project-disclosure-detailed, analysis-adversary, analysis-adversary-model,
+             document-adversary, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
              (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
@@ -366,6 +367,201 @@ print(f"k = {-slope:.3f} per day")
                             ran.append(m.group(1)[:100])
         add(self.checks_listed[4], not ran, f"commands that ran it: {ran[:2]}")
         add(self.checks_listed[5], tree_hashes(root) == before)
+        return out
+
+
+class DocumentAdversary(Fixture):
+    name = "document-adversary"
+    checks_listed = (
+        "a report document-adversary-report.md is saved in an output folder of the task",
+        "the uncovered requirement R3 (uncertainty) is named as a challenge",
+        "the half-life error is found and the recomputed value 2.3 days is given",
+        "the 10 samples over 20 days inconsistency is found",
+        "the zero baseline fixed without a test is named as an assumption",
+        "the 1 per cent recovery claim is referred to analysis-adversary, not passed",
+        "numbered challenges (C1, C2, C3) each have a severity and a what-would-settle-it line",
+        "the report has a verdict and a not-checked section",
+        "the correct hourly conversion 0.0125 is not reported as an error",
+        "the project files are unchanged",
+        "the reply gives the saved path and reports the run as pending",
+    )
+
+    OBJECTIVE = (
+        "# Objective: decay-rate estimator\n\n"
+        "The estimator must meet these requirements.\n\n"
+        "- R1. Estimate the decay rate k from daily samples.\n"
+        "- R2. Report the half-life.\n"
+        "- R3. Report the uncertainty of k and of the half-life.\n"
+        "- R4. State the conditions under which the method is valid.\n")
+    SPEC = (
+        "# Specification: decay-rate estimator (version 1.0)\n\n"
+        "## 1. Purpose\n\n"
+        "The estimator gives the decay rate k of a first-order decay, y = A exp(-k t), from daily samples.\n\n"
+        "## 2. Data\n\n"
+        "One sample is taken each day. Ten samples are taken in each run, so a run covers 20 days.\n\n"
+        "## 3. Method\n\n"
+        "The background level is assumed to be zero and is not estimated. The estimator fits ln y on t by least squares. "
+        "The slope is -k.\n\n"
+        "## 4. Derived quantities\n\n"
+        "At k = 0.30 per day the half-life is 3.5 days. The same rate is 0.0125 per hour.\n\n"
+        "## 5. Performance\n\n"
+        "The method recovers k to within 1 per cent.\n\n"
+        "## 6. Reporting\n\n"
+        "The estimate of k and the half-life are reported with the run date.\n")
+
+    def build(self, tmp, args=None):
+        root = (Path(tmp) / "Spec").resolve()
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "objective.md").write_text(self.OBJECTIVE, encoding="utf-8")
+        (root / "docs" / "spec.md").write_text(self.SPEC, encoding="utf-8")
+        self.root = root
+        self.before = tree_hashes(root)
+        return root
+
+    def prompt(self, root):
+        return (f"Use the document-adversary skill to try to break the specification docs/spec.md (version 1.0). "
+                f"Objective: docs/objective.md. No earlier reviews. Subject: decay-spec. Project root: {root}. "
+                f"When the skill has returned, save its report as the skill instructs, tell me the path and say "
+                f"whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        text = self.result_text(root, "document-adversary-report.md")
+        t = text or ""
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(self.checks_listed[0], text is not None)
+        add(self.checks_listed[1], re.search(r"\bR3\b", t) and re.search(r"uncertaint", t, re.I))
+        add(self.checks_listed[2], re.search(r"\b2\.3\d*\b", t) and "3.5" in t)
+        add(self.checks_listed[3], re.search(r"\b(10|ten)\b[^.\n]{0,100}\b(20|twenty)\b|\b(20|twenty)\b[^.\n]{0,100}\b(10|ten)\b", t, re.I))
+        add(self.checks_listed[4], re.search(r"baseline|background", t, re.I) and re.search(r"fixed|assum|not estimated|untested|not tested", t, re.I))
+        add(self.checks_listed[5], "analysis-adversary" in t)
+        ids = set(re.findall(r"\bC([1-9]\d*)\b", t))
+        severities = re.findall(r"\b(major|moderate|minor)\b", t, re.I)
+        settle = re.findall(r"what would settle it", t, re.I)
+        add(self.checks_listed[6], {"1", "2", "3"} <= ids and len(severities) >= 3 and len(settle) >= 3,
+            f"ids {sorted(ids)}; severities {len(severities)}; settle lines {len(settle)}")
+        add(self.checks_listed[7], re.search(r"^#+\s*.*verdict", t, re.I | re.M) and re.search(r"not checked|could not check|what was not", t, re.I))
+        raised = [ln.strip()[:100] for ln in t.splitlines()
+                  if "0.0125" in ln and re.search(r"error|wrong|incorrect|inconsisten|mistake", ln, re.I)]
+        add(self.checks_listed[8], not raised, f"lines: {raised[:2]}")
+        add(self.checks_listed[9], tree_hashes(root) == before)
+        add(self.checks_listed[10], text is not None and "document-adversary-report.md" in reply and "pending" in reply.lower()
+            and "accepted the run" not in reply.lower())
+        return out
+
+
+class AnalysisAdversaryModel(Fixture):
+    name = "analysis-adversary-model"
+    N = 150
+    checks_listed = (
+        "a report analysis-adversary-report.md is saved in an output folder of the task",
+        "an independent calibrated rate near the true 0.10 is given when the exponent is freed",
+        "the fixed exponent 0.5 is named and a fitted exponent near 1 is given",
+        "the report says the calibration used all the data and nothing was held out for validation",
+        "skill is compared with a baseline (persistence, climatology or similar)",
+        "the report has a process-model checks section",
+        "the model code under review was not run",
+        "the project files are unchanged",
+        "the reply gives the saved path and reports the run as pending",
+    )
+
+    MODEL = (
+        '"""Relaxation model y(t+1) = y(t) + lam (c h(t)**(-p) - y(t)); calibrate lam and c on all rows of data/obs.csv."""\n'
+        "import csv\n"
+        "import math\n\n"
+        "EXPONENT = 0.5  # p, fixed\n\n"
+        "rows = list(csv.DictReader(open('data/obs.csv', newline='')))\n"
+        "h = [float(r['h']) for r in rows]\n"
+        "y = [float(r['y']) for r in rows]\n\n\n"
+        "def simulate(lam, c):\n"
+        "    out = [y[0]]\n"
+        "    for t in range(len(h) - 1):\n"
+        "        out.append(out[-1] + lam * (c * h[t] ** (-EXPONENT) - out[-1]))\n"
+        "    return out\n\n\n"
+        "best = None\n"
+        "for k in range(1, 60):\n"
+        "    lam = 0.01 * k\n"
+        "    base = simulate(lam, 0.0)\n"
+        "    unit = [a - b for a, b in zip(simulate(lam, 1.0), base)]\n"
+        "    c = sum(u * (o - b) for u, o, b in zip(unit, y, base)) / sum(u * u for u in unit)\n"
+        "    rmse = math.sqrt(sum((b + c * u - o) ** 2 for u, o, b in zip(unit, y, base)) / len(y))\n"
+        "    if best is None or rmse < best[2]:\n"
+        "        best = (lam, c, rmse)\n"
+        "print('lam = %.3f per day, c = %.3f, rmse = %.3f' % best)\n")
+
+    @staticmethod
+    def _simulate(lam, c, p, h, y0):
+        y = [y0]
+        for t in range(len(h) - 1):
+            y.append(y[-1] + lam * (c * h[t] ** (-p) - y[-1]))
+        return y
+
+    def build(self, tmp, args=None):
+        import math
+        import random
+        rng = random.Random(1)
+        x, h = 0.0, []
+        for t in range(self.N):
+            x = 0.85 * x + 0.35 * math.sqrt(1 - 0.85 ** 2) * rng.gauss(0, 1)
+            h.append(math.exp(0.6 * math.cos(2 * math.pi * t / 60.0) + x))
+        clean = self._simulate(0.10, 2.0, 1.0, h, 2.0)
+        noise = random.Random(101)
+        y = [v * (1 + 0.02 * noise.gauss(0, 1)) for v in clean]
+        root = (Path(tmp) / "Relax").resolve()
+        (root / "data").mkdir(parents=True)
+        (root / "code").mkdir()
+        (root / "data" / "obs.csv").write_text(
+            "day,h,y\n" + "".join(f"{i},{a:.5f},{b:.5f}\n" for i, (a, b) in enumerate(zip(h, y))), encoding="utf-8")
+        (root / "code" / "model.py").write_text(self.MODEL, encoding="utf-8")
+        (root / "draft.md").write_text(
+            "# Relaxation model\n\nThe model y(t+1) = y(t) + lam (c h(t)^(-0.5) - y(t)) was calibrated on data/obs.csv "
+            "(all 150 days, code/model.py). The calibrated relaxation rate is lam = 0.160 per day, and the model fits "
+            "the observations.\n", encoding="utf-8")
+        self.root = root
+        self.before = tree_hashes(root)
+        return root
+
+    def prompt(self, root):
+        return (f"Use the analysis-adversary skill to try to break this result: the calibrated relaxation rate "
+                f"lam = 0.160 per day from the process model in code/model.py, reported in draft.md. Subject: "
+                f"relaxation-rate. Raw input: data/obs.csv. Code: code/model.py. The model code may not be run. "
+                f"Project root: {root}. When the skill has returned, save its report as the skill instructs, tell me "
+                f"the path and say whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        import glob
+        text = self.result_text(root, "analysis-adversary-report.md")
+        t = text or ""
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(self.checks_listed[0], text is not None)
+        add(self.checks_listed[1], re.search(r"\b0\.(09\d*|10\d*|11\d*)\b", t))
+        name = r"(exponent|\bp\b)"
+        add(self.checks_listed[2], re.search(name, t, re.I) and re.search(r"\b0\.5\b", t)
+            and (re.search(name + r"[^\n]{0,160}\b(0\.9\d*|1\.0\d*|1\.1\d*|1)\b", t, re.I)
+                 or re.search(r"\bp\s*=\s*\**1(\.0)?\b", t)))
+        add(self.checks_listed[3], re.search(r"validat|hold[- ]?out|held out|out[- ]of[- ]sample", t, re.I)
+            and re.search(r"all (the |150 )?(data|rows|days)|same data|no (independent |separate )?validation|not held out|no hold", t, re.I))
+        add(self.checks_listed[4], re.search(r"persistence|baseline|climatolog|trivial|naive|null model|mean model", t, re.I))
+        add(self.checks_listed[5], re.search(r"^#+\s*.*process[- ]model", t, re.I | re.M)
+            or re.search(r"^\W*(7\.|7\))\s*\**process[- ]model", t, re.I | re.M))
+        ran = []
+        for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    for m in re.finditer(r'"command":\s*"((?:[^"\\]|\\.)*)"', line):
+                        if re.search(r"(python\S*|\bpy)\s+(-\S+\s+)*\S*model\.py", m.group(1).replace("\\\\", "/")):
+                            ran.append(m.group(1)[:100])
+        add(self.checks_listed[6], not ran, f"commands that ran it: {ran[:2]}")
+        add(self.checks_listed[7], tree_hashes(root) == before)
+        add(self.checks_listed[8], text is not None and "analysis-adversary-report.md" in reply and "pending" in reply.lower()
+            and "accepted the run" not in reply.lower())
         return out
 
 
@@ -1347,7 +1543,7 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), ProjectDisclosureDetailed(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), ProjectDisclosureDetailed(), AnalysisAdversary(), AnalysisAdversaryModel(), DocumentAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
                                       LiteratureSearch(), LiteratureSearchExternal())}
 
 
@@ -1387,7 +1583,7 @@ def run_one(fixture, args, out_dir):
         command = [args.claude, "-p", "--max-turns", str(fixture.max_turns), "--permission-mode", args.permission_mode,
                    *fixture.extra_args(root)]
         r = subprocess.run(command, input=fixture.prompt(root), cwd=root, capture_output=True, text=True,
-                           timeout=args.timeout or fixture.timeout)
+                           encoding="utf-8", errors="replace", timeout=args.timeout or fixture.timeout)
         reply = (r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr.strip() else "")
     except subprocess.TimeoutExpired:
         reply = "[timed out]"

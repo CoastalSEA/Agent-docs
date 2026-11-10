@@ -242,6 +242,120 @@ def dele(text, author="Claude"):
             f'{text}</w:delText></w:r></w:del>')
 
 
+class DocumentAdversaryFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.fx = rf.DocumentAdversary()
+        self.root = self.fx.build(self.work)
+
+    def write(self, text):
+        folder = self.root / "outputs" / "document-adversary-decay-spec-101126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "document-adversary-report.md").write_text(text, encoding="utf-8")
+
+    REPLY = "Saved as document-adversary-report.md. The run is pending review."
+    GOOD = (
+        "# Report\n\n## Verdict\n\nThe specification does not meet R3.\n\n## Challenges\n\n"
+        "**C1 (major).** R3 asks for the uncertainty of k and the specification has none. *What would settle it:* a section.\n\n"
+        "**C2 (moderate).** At k = 0.30 per day the half-life is 2.31 days, not 3.5 days. *What would settle it:* a correction.\n\n"
+        "**C3 (minor).** Ten samples of one per day cannot cover 20 days. *What would settle it:* the true run length.\n\n"
+        "**C4 (moderate).** The background is fixed at zero and not tested. *What would settle it:* a fit with an offset.\n\n"
+        "The claim of 1 per cent recovery needs data: refer it to analysis-adversary.\n\n"
+        "## Null results\n\nThe 0.0125 per hour conversion holds.\n\n## Not checked\n\nSource papers.\n")
+
+    def results(self, reply=None):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, self.REPLY if reply is None else reply, self.fx.before)}
+
+    def test_the_planted_faults_are_in_the_fixture(self):
+        spec = (self.root / "docs" / "spec.md").read_text(encoding="utf-8")
+        self.assertIn("half-life is 3.5 days", spec)
+        self.assertAlmostEqual(math.log(2) / 0.30, 2.31, places=2)
+        self.assertAlmostEqual(0.30 / 24, 0.0125)
+        self.assertIn("Ten samples", spec)
+        self.assertNotIn("uncertaint", spec.lower())
+        self.assertIn("R3", (self.root / "docs" / "objective.md").read_text(encoding="utf-8"))
+
+    def test_a_good_report_passes_every_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_planted_problem_fails_its_check(self):
+        cases = [
+            (self.GOOD.replace("R3", "a requirement").replace("uncertainty", "error"), 1),
+            (self.GOOD.replace("2.31", "a different value"), 2),
+            (self.GOOD.replace("Ten samples", "The samples").replace("20 days", "the run"), 3),
+            (self.GOOD.replace("background", "offset").replace("baseline", "offset"), 4),
+            (self.GOOD.replace("analysis-adversary", "another skill"), 5),
+            (self.GOOD.replace("What would settle it", "Note"), 6),
+            (self.GOOD.replace("## Not checked", "## Other").replace("Source papers.", ""), 7),
+            (self.GOOD + "\n**C5 (minor).** The 0.0125 per hour value is wrong.\n", 8),
+        ]
+        for text, i in cases:
+            self.write(text)
+            self.assertFalse(self.results()[self.fx.checks_listed[i]], self.fx.checks_listed[i])
+
+    def test_missing_report_changed_file_and_reply(self):
+        self.assertFalse(self.results()[self.fx.checks_listed[0]])
+        self.write(self.GOOD)
+        self.assertFalse(self.results("The run is pending review.")[self.fx.checks_listed[10]])
+        self.assertFalse(self.results("document-adversary-report.md saved and I accepted the run, pending no more")[self.fx.checks_listed[10]])
+        (self.root / "docs" / "spec.md").write_text("changed", encoding="utf-8")
+        self.assertFalse(self.results()[self.fx.checks_listed[9]])
+
+
+class AnalysisAdversaryModelFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.fx = rf.AnalysisAdversaryModel()
+        self.root = self.fx.build(self.work)
+
+    def write(self, text):
+        folder = self.root / "outputs" / "analysis-adversary-relaxation-rate-101126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "analysis-adversary-report.md").write_text(text, encoding="utf-8")
+
+    REPLY = "Saved as analysis-adversary-report.md. The run is pending review."
+    GOOD = (
+        "# Report\n\nThe reported 0.160 reproduces with the exponent fixed at 0.5. With the exponent freed the fit gives an "
+        "exponent of 1.00 and lam = 0.100 per day.\n\nThe calibration used all the data and no data were held out for "
+        "validation. A persistence baseline was not stated.\n\n## 7. Process-model checks\n\nSensitivity swept.\n")
+
+    def results(self, reply=None):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, self.REPLY if reply is None else reply, self.fx.before)}
+
+    def test_the_planted_bias_is_in_the_fixture(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        out = subprocess.run([sys.executable, "-I", "code/model.py"], cwd=self.root, capture_output=True, text=True)
+        self.assertIn("lam = 0.160", out.stdout)
+        rows = [ln.split(",") for ln in (self.root / "data" / "obs.csv").read_text(encoding="utf-8").splitlines()[1:]]
+        self.assertEqual(len(rows), self.fx.N)
+
+    def test_a_good_report_passes_every_check(self):
+        self.write(self.GOOD)
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_planted_problem_fails_its_check(self):
+        cases = [
+            (self.GOOD.replace("0.100", "0.160"), 1),
+            (self.GOOD.replace("1.00", "0.75").replace("0.5", "a value"), 2),
+            (self.GOOD.replace("all the data", "some data").replace("no data were held out", "a split was made"), 3),
+            (self.GOOD.replace("persistence baseline", "comparison"), 4),
+            (self.GOOD.replace("Process-model checks", "Other"), 5),
+        ]
+        for text, i in cases:
+            self.write(text)
+            self.assertFalse(self.results()[self.fx.checks_listed[i]], self.fx.checks_listed[i])
+
+    def test_missing_report_changed_file_and_reply(self):
+        self.assertFalse(self.results()[self.fx.checks_listed[0]])
+        self.write(self.GOOD)
+        self.assertFalse(self.results("The run is pending review.")[self.fx.checks_listed[8]])
+        (self.root / "draft.md").write_text("changed", encoding="utf-8")
+        self.assertFalse(self.results()[self.fx.checks_listed[7]])
+
+
 class TrackedChangeText(unittest.TestCase):
     def test_accept_and_reject_read_the_tracked_changes(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:

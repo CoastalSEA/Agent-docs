@@ -114,6 +114,11 @@ without judging the data. State in the report that data accuracy was out
 of scope by instruction. With no such instruction, the steps below apply
 as written.
 
+When the result comes from a process model (a simulation or numerical model
+built from governing equations, calibrated to data), state the model version,
+the calibration data and the validation data, and whether the invocation
+allows the model code to be run (see "Process-model results").
+
 ## Steps
 
 1. **Reproduce the reported outcome independently**, per the scoping note
@@ -204,6 +209,47 @@ as written.
    fix, the same hard boundary this project's other skills observe for
    their own domains.
 
+## Process-model results
+
+Apply this section as well as the Steps when the result is an output of a
+process model. Steps 2 to 5 still apply.
+
+The report then has a seventh section headed **Process-model checks** (see
+Deliverables). It is required. It lists every check below as done, with its
+numbers, or not done, with the reason. Do not leave a check out of the list.
+
+- **Reproduction.** Re-implement the governing equations in a reduced form
+  from the specification, with your own code, and compare with the model's
+  already-written output. Where a reduced form cannot reproduce the output,
+  test the model's own output against analytic solutions, limiting cases and
+  conservation instead, and say that the full model was not reproduced.
+- **Running the model.** Do not run the original model code. Run a copy only if
+  the invocation says the model may be run: put the copy in the system temp
+  folder, set every output path there, and state in the report that a copy was
+  run.
+- **Verification.** Conservation (mass or volume closes to the stated
+  tolerance), dimensions and units, limiting cases with a known answer, and
+  convergence in step size and resolution. Report each as a number.
+- **Calibration and validation.** Name the calibration and validation data.
+  Check that the validation data was not used to choose parameters, settings
+  or the model form. Compare the skill with a trivial baseline (persistence,
+  climatology or the initial state), on the validation data only.
+- **Identifiability.** Generate synthetic data from the model with known
+  parameters, at the real sampling dates and noise level, and fit it. Report the
+  share of fits that recover each parameter within a stated factor, and any
+  parameters that cancel or trade off against each other.
+- **Misspecification.** For each parameter or exponent fixed without a test,
+  free it, or fit data generated with a different value, and report the bias in
+  the calibrated parameters and the change in fit. A bias that the fit
+  statistic does not reveal is a finding.
+- **Sensitivity.** Sweep the inputs and settings that the result depends on
+  (forcing, datum, boundary and initial conditions, the model step), one at a
+  time across a defensible range, with the sample size for each. Name the one
+  that changes the result most (Step 5).
+- **Equifinality and uncertainty.** Look for parameter sets that fit as well but
+  predict differently. Compare the reported uncertainty with the spread you
+  find.
+
 ## Deliverables
 
 **This skill's own subagent has no `Write` tool — confirmed live, and
@@ -280,6 +326,11 @@ path, covers:
    write-up disclosed making it.
 6. **What could not be checked**, stated plainly. If the data was taken
    as given, say here that data accuracy was out of scope by instruction.
+7. **Process-model checks** (required for a process-model result, under that
+   heading): the
+   verification numbers, the calibration and validation split,
+   identifiability, misspecification and sensitivity results, each with its
+   own sample size. Say which were not done and why.
 
 ## Checks
 
@@ -319,6 +370,11 @@ path, covers:
   evaluates) — a split can have one property without the other.
 - A negative/no-model-found result is treated as a reviewable claim in its
   own right, not skipped for lack of a single number to reproduce.
+- For a process-model result, the report states whether the model was
+  reproduced, tested against limits, or neither, and whether a copy of the
+  code was run.
+- For a process-model result, validation data is checked for independence
+  from calibration, and skill is stated against a baseline.
 - The subagent returns its report as text, and the invoking session saves it
   to the deliverable path before treating the task as done — don't let the
   handoff silently drop. When the review ran inline (see "Run the review in a
