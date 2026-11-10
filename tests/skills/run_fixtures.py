@@ -13,7 +13,7 @@ folder names made from the temporary project path, and removes them afterwards.
 
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
-                                           [--estuary-doc PATH] [--test-library PATH] [--external]
+                                           [--test-library PATH] [--external]
   skill      project-disclosure, project-disclosure-detailed, analysis-adversary, analysis-adversary-model,
              analysis-adversary-independent, document-adversary, document-adversary-independent, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
@@ -21,8 +21,6 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
-  --estuary-doc PATH   the source .doc for the proofread fixture (default working_docs/Estuary Notes.doc);
-             the fixture needs Microsoft Word and is skipped without it
   --test-library PATH  the .enl file of the test EndNote library for the citation-check and literature-search
              fixtures (or set FIXTURE_ENDNOTE_LIBRARY); a fixture is skipped without it
   --external  also run the two external fixtures: literature-search-external sends a query to OpenAlex, and
@@ -830,7 +828,7 @@ class Proofread(Fixture):
     name = "proofread"
     uses_docx_skill = True
     timeout = 1800
-    # (text in the converted paragraph, text with the planted fault); each lies inside one run
+    # (text in the clean paragraph, text with the planted fault)
     PLANTS = [
         ("relatively stable", "relativly stable"),
         ("supply of sediment.", "supply of sedement."),
@@ -854,34 +852,28 @@ class Proofread(Fixture):
         "the reply says that the validator ran or that it did not",
     )
 
+    # A generated prose paragraph (the proofread scope), a second paragraph that is out of scope and holds a fault the
+    # skill must leave alone, and a short verse. Each fault in PLANTS is made in a run of the first paragraph.
+    PROSE = ("Macrotidal estuaries are relatively stable landforms over decades, although their form depends on the "
+             "supply of sediment. The channels and flats of each system reflect an interplay of processes which act over "
+             "very different time scales. Sheltered drowned valley harbours fill slowly with mud, and the present form, "
+             "like the past and future, is affected by changes in sea level. Many estuaries have had similar histories of "
+             "infilling and scour.")
+    OUT_OF_SCOPE = ("Surveys of the two seperate channels were repeated each spring, and the results are summarised in "
+                    "the notes that follow.")
+    VERSE = ["The tide comes in,", "the tide goes out,", "and the mud remains."]
+
     def build(self, tmp, args=None):
-        source = Path(getattr(args, "estuary_doc", None) or REPO / "working_docs" / "Estuary Notes.doc")
-        if not source.is_file():
-            raise Skip(f"source document not found: {source} (give --estuary-doc)")
-        if sys.platform != "win32" or not word_available():
-            raise Skip("Microsoft Word is not available (needed to convert the .doc and for the skill)")
+        require_word()
         root = (Path(tmp) / "Notes").resolve()
         root.mkdir()
-        converted = root / "converted.docx"
-        code, out = word_run(
-            "$w = New-Object -ComObject Word.Application; $w.Visible = $false; $w.DisplayAlerts = 0\n"
-            f"try {{ $d = $w.Documents.Open('{source}', $false, $true); $d.SaveAs2('{converted}', 16); $d.Close($false) }}\n"
-            "finally { $w.Quit() }\n")
-        if code != 0 or not converted.is_file():
-            raise Skip(f"conversion with Word failed: {out[:200]}")
+        faulty = self.PROSE
+        for old, new in self.PLANTS:
+            if faulty.count(old) != 1:
+                raise AssertionError(f"the generated paragraph must hold {old!r} exactly once")
+            faulty = faulty.replace(old, new)
         target = root / "Estuary Notes.docx"
-        with zipfile.ZipFile(converted) as zin, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if item.filename == "word/document.xml":
-                    xml = data.decode("utf-8")
-                    for old, new in self.PLANTS:
-                        if xml.count(old) != 1:
-                            raise Skip(f"planted text not found exactly once in the converted document: {old!r}")
-                        xml = xml.replace(old, new)
-                    data = xml.encode("utf-8")
-                zout.writestr(item, data)
-        converted.unlink()
+        write_minimal_docx(target, [w_para(faulty), w_para(self.OUT_OF_SCOPE), *[w_para(v) for v in self.VERSE]])
         self.root = root
         self.target = target
         self.planted = doc_text(target)
@@ -1782,7 +1774,6 @@ def main(argv):
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--timeout", type=int, default=None)
-    ap.add_argument("--estuary-doc", default=None)
     ap.add_argument("--test-library", default=None)
     ap.add_argument("--external", action="store_true")
     ap.add_argument("--claude", default=shutil.which("claude") or "claude")

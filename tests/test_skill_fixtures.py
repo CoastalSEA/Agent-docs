@@ -619,11 +619,32 @@ class ProofreadFixture(Base):
         rf.word_run = lambda script, timeout=180: (1, "the file is corrupt")
         self.assertFalse(self.results()[self.fx.checks_listed[8]])
 
-    def test_the_fixture_is_skipped_without_its_source(self):
-        class Args:
-            estuary_doc = str(self.work / "missing.doc")
+    def test_the_fixture_is_skipped_without_word(self):
+        saved = rf.word_available
+        rf.word_available = lambda: False
+        self.addCleanup(setattr, rf, "word_available", saved)
         with self.assertRaises(rf.Skip):
-            rf.Proofread().build(self.work / "x", Args())
+            rf.Proofread().build(self.work / "x")
+
+    def test_the_fixture_builds_its_own_document_with_each_fault_once(self):
+        saved = rf.word_available
+        rf.word_available = lambda: True
+        self.addCleanup(setattr, rf, "word_available", saved)
+        fx = rf.Proofread()
+        (self.work / "gen").mkdir()
+        root = fx.build(self.work / "gen")
+        self.assertEqual(root.name, "Notes")
+        paragraphs = rf.doc_text(root / "Estuary Notes.docx")
+        self.assertEqual(paragraphs[0], fx.planted[0])
+        for old, new in rf.Proofread.PLANTS:
+            self.assertIn(new, paragraphs[0])
+            self.assertNotIn(old, paragraphs[0])
+            self.assertEqual(rf.Proofread.PROSE.count(old), 1, old)
+        self.assertTrue(paragraphs[0].startswith("Macrotidal estuaries"))
+        self.assertIn("seperate", paragraphs[1])
+        self.assertEqual(len(paragraphs), 5)
+        for word in rf.Proofread.MUST_NOT_REMAIN:
+            self.assertNotIn(word, rf.Proofread.PROSE)
 
     def test_every_plant_is_a_distinct_fault_the_check_can_see(self):
         for old, new in rf.Proofread.PLANTS:
