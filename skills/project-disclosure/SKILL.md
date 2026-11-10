@@ -1,6 +1,6 @@
 ---
 name: project-disclosure
-description: Find every session run against the current project (root plus any subfolders) and draft an AI-use disclosure from those logs, and only from those logs.
+description: Find every session run against the current project (root plus any subfolders) and draft an AI-use disclosure from those logs, and only from those logs. Short timeline by default; pass --detailed for the per-session checklist and prompt appendix.
 context: fork
 agent: general-purpose
 background: true
