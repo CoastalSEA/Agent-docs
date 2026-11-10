@@ -533,6 +533,67 @@ class AnalysisAdversaryIndependentFixture(Base):
         self.assertFalse(self.results()[self.fx.checks_listed[9]])
 
 
+class Preflight(unittest.TestCase):
+    """The runner checks the permission mode that a headless session really starts in."""
+
+    @staticmethod
+    def fake(stdout="", stderr="", raises=None):
+        import subprocess as sp
+        from unittest import mock
+
+        def run(*args, **kwargs):
+            if raises:
+                raise raises
+            return sp.CompletedProcess(args[0], 0, stdout=stdout, stderr=stderr)
+        return mock.patch.object(rf.subprocess, "run", run)
+
+    @staticmethod
+    def init(mode):
+        return json.dumps({"type": "system", "subtype": "init", "permissionMode": mode}) + "\n"
+
+    def test_the_requested_mode_is_accepted(self):
+        with self.fake(stdout='{"type":"system","subtype":"hook_started"}\n' + self.init("auto")):
+            self.assertEqual(rf.preflight("claude", "auto"), (0, ""))
+
+    def test_a_different_mode_is_refused_with_an_explanation(self):
+        with self.fake(stdout=self.init("default")):
+            code, message = rf.preflight("claude", "auto")
+        self.assertEqual(code, 2)
+        self.assertIn("'auto' mode start in 'default' mode", message)
+        self.assertIn("--no-preflight", message)
+
+    def test_an_unreadable_start_message_warns_and_continues(self):
+        with self.fake(stdout="not json\n", stderr="odd"):
+            code, message = rf.preflight("claude", "auto")
+        self.assertEqual(code, 0)
+        self.assertTrue(message.startswith("Warning"))
+        self.assertIn("odd", message)
+
+    def test_a_missing_claude_is_an_error(self):
+        with self.fake(raises=FileNotFoundError("no claude")):
+            code, message = rf.preflight("claude", "auto")
+        self.assertEqual(code, 2)
+        self.assertIn("could not run a test session", message)
+
+    def test_main_stops_before_any_fixture_and_no_preflight_skips_the_check(self):
+        calls = []
+        saved = rf.run_one
+        rf.run_one = lambda fixture, args, out: calls.append(fixture.name) or (None, 0, "skipped")
+        self.addCleanup(setattr, rf, "run_one", saved)
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.fake(stdout=self.init("default")):
+                self.assertEqual(rf.main(["project-disclosure"]), 2)
+            self.assertEqual(calls, [])
+            with self.fake(stdout=self.init("default")):
+                rf.main(["project-disclosure", "--no-preflight"])
+            self.assertEqual(calls, ["project-disclosure"])
+            with self.fake(stdout=self.init("auto")):
+                rf.main(["project-disclosure"])
+        self.assertEqual(calls, ["project-disclosure", "project-disclosure"])
+
+
 class TrackedChangeText(unittest.TestCase):
     def test_accept_and_reject_read_the_tracked_changes(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:

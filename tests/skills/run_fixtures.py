@@ -13,7 +13,7 @@ folder names made from the temporary project path, and removes them afterwards.
 
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
-                                           [--external]
+                                           [--external] [--no-preflight]
   skill      project-disclosure, project-disclosure-detailed, analysis-adversary, analysis-adversary-model,
              analysis-adversary-independent, document-adversary, document-adversary-independent, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
@@ -21,6 +21,7 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
+  --no-preflight  skip the one-turn test session that checks the requested permission mode is the one that starts
   --external  also run the two external fixtures: literature-search-external sends a query to OpenAlex, and
              citation-check-external sends the titles, authors, years and DOIs of four records to CrossRef, OpenAlex
              and arXiv (both are skipped otherwise)
@@ -1761,6 +1762,46 @@ def run_one(fixture, args, out_dir):
     return results, seconds, dest
 
 
+def effective_mode(claude, mode, timeout=180):
+    """The permission mode a headless session really starts in, read from the start message of a one-turn session.
+
+    Returns (mode or None, message). Claude Code starts in Manual mode when the requested mode (auto) is not available to
+    the session, so the requested mode is not enough."""
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            r = subprocess.run([claude, "-p", "--max-turns", "1", "--permission-mode", mode, "--output-format", "stream-json",
+                                "--verbose"], input="Reply with the single word ok.", cwd=folder, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return None, f"could not run a test session with {claude}: {e}"
+    for line in (r.stdout or "").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("type") == "system" and e.get("subtype") == "init":
+            return e.get("permissionMode"), ""
+    return None, "the test session sent no start message" + (f": {r.stderr.strip()[:200]}" if (r.stderr or "").strip() else "")
+
+
+def preflight(claude, mode):
+    """(exit code, message): 2 if sessions will not start in the requested mode or cannot start, else 0 (the message may
+    be a warning that the mode could not be read)."""
+    got, why = effective_mode(claude, mode)
+    if got is None:
+        if why.startswith("could not run"):
+            return 2, why
+        return 0, f"Warning: could not confirm the permission mode ({why}). Continuing."
+    if got != mode:
+        return 2, (f"Sessions requested in '{mode}' mode start in '{got}' mode. The requested mode is probably not available to "
+                   f"this session (auto mode needs a supported model and provider, and an administrator or Anthropic can switch it "
+                   f"off). A headless session in '{got}' mode cannot get approval for run control or Python commands, so the skills "
+                   f"stop at their first step and every fixture would fail. Use a session where '{mode}' mode is available, or pass "
+                   f"--permission-mode with a mode you have set up (for example with allow rules in your settings), or "
+                   f"--no-preflight to run anyway.")
+    return 0, ""
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="run_fixtures.py", description="Run skills on fixtures with headless Claude Code.")
     ap.add_argument("--version", action="version", version=f"run_fixtures.py {VERSION}")
@@ -1771,6 +1812,7 @@ def main(argv):
     ap.add_argument("--external", action="store_true")
     ap.add_argument("--claude", default=shutil.which("claude") or "claude")
     ap.add_argument("--permission-mode", default="auto")
+    ap.add_argument("--no-preflight", action="store_true")
     ap.add_argument("--out", default=str(REPO / "working_docs" / "skill-runs"))
     a = ap.parse_args(argv)
     names = a.skills or list(FIXTURES)
@@ -1784,6 +1826,12 @@ def main(argv):
             for c in FIXTURES[n].checks_listed:
                 print(f"  - {c}")
         return 0
+    if not a.no_preflight:
+        code, message = preflight(a.claude, a.permission_mode)
+        if message:
+            print(message, file=sys.stderr)
+        if code:
+            return code
     failed = False
     for n in names:
         results, seconds, dest = run_one(FIXTURES[n], a, Path(a.out))

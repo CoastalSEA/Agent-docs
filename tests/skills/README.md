@@ -4,7 +4,7 @@
 
 ```
 python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS] [--permission-mode MODE]
-                                    [--external]
+                                    [--external] [--no-preflight]
 ```
 
 | Fixture | Planted facts | Checks |
@@ -27,7 +27,7 @@ python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SEC
 - The two `proofread` fixtures use the `docx` skill scripts. Before each one the runner prints the result of `scripts/check_docx_skill.py` and saves it as `docx-skill-check.txt`: a warning means the scripts are missing or have changed since they were last accepted. Both are generated, need no supplied document, and need Windows with Word; they are skipped without it.
 - The two `citation-check` fixtures above generate their own library (the `.enl` file is itself the SQLite database that the EndNote server opens, with the linked PDF beside it) and need only the server's packages (`mcp`, `pypdf`); a missing package skips them. Their checks read the tool calls of the session and ignore the `Skill` and `Agent` calls, which repeat the prompt, so the names of forbidden services in the prompt are not read as calls. Each result folder holds `tool-calls.txt`, a one-line summary of every call and the URLs seen, because the session transcripts are removed after the run.
 - The EndNote fixtures (`citation-check`, `citation-check-context`, `citation-check-external`, `literature-search`, `literature-search-external`) generate their own small library with invented records, and need only the EndNote server's Python packages (`mcp`, and `pypdf` for the context fixture). A missing package skips them, and a skip is not a failure. No EndNote installation and no library of your own is needed: the library is served to the session through `--mcp-config` with `--strict-mcp-config`, so the session reads it and not the library registered for normal work.
-- The sessions run in `auto` mode, as in interactive use. A headless session in the default mode cannot get approval for run control or Python commands, and the skills then stop at their first step.
+- The sessions run in `auto` mode by default (`--permission-mode` changes it). A headless session in the default mode cannot get approval for run control or Python commands, and the skills then stop at their first step. Auto mode is not available to every session: it needs a supported model and provider, and an administrator or Anthropic can switch it off. When it is not available, Claude Code starts the session in the default mode without saying so. Before the first fixture the runner therefore starts a one-turn session, reads the permission mode from its start message, and stops with an explanation if it is not the requested one (`--no-preflight` skips the check). To run without auto mode, set up the approvals yourself (for example allow rules in your settings) and pass `--permission-mode` for a mode you have set up.
 - Each run uses the live configuration: the installed skills, the run control script and `machine.md`. It tests what is deployed.
 - The `project-disclosure` fixture writes synthetic session logs into `~/.claude/projects/` and removes them afterwards.
 - Results go to `working_docs/skill-runs/<skill>-<DDMMYY-HHMM>/` (git-ignored): `reply.txt`, the saved deliverable and `checks.json`.

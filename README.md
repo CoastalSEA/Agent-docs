@@ -139,11 +139,28 @@ own writing rules and code header format). They are never stored in this repo. `
    `profile.md` by hand, because it holds your own rules. A Claude session can help with
    `machine.md`, but it must report each assumption and leave blank what it cannot detect.
 3. **Terminal.** Run `python deploy.py status`, then `python deploy.py apply`. This installs the
-   global rules, the skills and the scripts. `apply` asks `[y/N]` at a terminal.
+   global rules, the skills and the scripts. `apply` asks `[y/N]` at a terminal. Read "Before you
+   run `apply`" below first if you already use Claude Code.
 4. **Terminal.** Run `python deploy.py doctor`. It must report no problems. Run it after
    `apply`, because `machine.md` names the scripts that `apply` installs.
 5. **New Claude session.** Ask it to quote the `Marker:` line of each file. A missing rules file
    fails silently, and `doctor` cannot test that a session loads the files.
+
+**Before you run `apply`.** `apply` overwrites a live file that differs from its repository copy: your
+`~/.claude/CLAUDE.md`, any skill with the same name as one in `skills/`, and the scripts in
+`~/.claude/scripts/`. Edits you made to those live files are replaced. It copies each file it replaces to
+`<target>/backups/deploy-<DDMMYY-HHMM>/` first, but that is one level of backup, and a second `apply` adds a
+new folder and does not restore anything. It never touches `rules/machine.md`, `rules/profile.md`,
+`settings.json`, or skills and files that are not in this repository, and it never deletes.
+
+If you already have a `~/.claude/CLAUDE.md`, skills or scripts of your own:
+
+1. Run `python deploy.py status --diff` and read what would change.
+2. Back up your configuration folder yourself first (copy `~/.claude`, or at least `CLAUDE.md`, `skills/`
+   and `scripts/`, to a safe place).
+3. If you want to keep edits you made to a live file, merge them into the repository copy before `apply`,
+   because `apply` makes the live file equal to the repository.
+4. Try it on a scratch folder first: `python deploy.py apply --target <empty folder>`.
 
 Optional: `python deploy.py hooks` adds three hooks to `~/.claude/settings.json`: block `git push` while
 `records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before accept, reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). `python deploy.py hooks --retention-notice` also adds a start-of-session notice when session transcripts of the project are about to be deleted (`scripts/log_retention.py`; the retention period is `cleanupPeriodDays` in `settings.json`). It uses the interpreter named on the Python
@@ -231,6 +248,9 @@ configuration.
   interactive parts have only been used on Windows: skills, the status line, the EndNote server and the machine files.
 - After a Claude Code update or a skill sync, the `proofread` summary and `deploy.py doctor` warn if the `docx` skill scripts it uses have changed. Re-run `python tests/skills/run_fixtures.py proofread proofread-structure` (see `tests/skills/README.md`), then `check_docx_skill.py --accept` (see `scripts/README.md`).
 - A skill edited in a session does not take effect until a new session starts.
+- Permission modes. The rules and settings here use ask and deny rules only, which apply in every mode. The skills work in
+  any mode, but in the default mode each shell, Python and PowerShell call asks for approval. The fixture runner needs auto
+  mode and checks for it first (see `tests/skills/README.md`).
 - Before the script, files were copied by hand and checked with `diff`. The script replaces
   that routine for the files in the table above.
 - For skills, see `skills/skill_location.md` for project-level, user-level and plugin-based
