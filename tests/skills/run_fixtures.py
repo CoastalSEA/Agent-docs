@@ -14,7 +14,7 @@ folder names made from the temporary project path, and removes them afterwards.
 Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--timeout SECONDS]
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
                                            [--estuary-doc PATH] [--test-library PATH] [--external]
-  skill      project-disclosure, analysis-adversary, proofread, proofread-structure, citation-check,
+  skill      project-disclosure, project-disclosure-detailed, analysis-adversary, proofread, proofread-structure, citation-check,
              citation-check-context, citation-check-external, literature-search, literature-search-external
              (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
@@ -143,7 +143,11 @@ class ProjectDisclosure(Fixture):
         "no conclusion about human oversight is drawn",
         "the reply reports the run as pending and does not accept it",
         "the project files are unchanged",
+        "short form: a timeline of at most 15 lines, no prompt appendix, and --detailed is offered",
     )
+    form = "short"
+    TAIL = ("Do not ask me questions. When the skill has returned, tell me where the file was written and whether the "
+            "run is pending review.")
 
     def build(self, tmp, args=None):
         self.base = Path(tmp)
@@ -225,9 +229,7 @@ class ProjectDisclosure(Fixture):
         jsonl(folder / f"{sid}.jsonl", entries)
 
     def prompt(self, root):
-        return ("Use the project-disclosure skill to draft the AI-use disclosure for this project. Do not ask me "
-                "questions. When the skill has returned, tell me where the file was written and whether the run is "
-                "pending review.")
+        return ("Use the project-disclosure skill to draft the AI-use disclosure for this project. " + self.TAIL)
 
     def check(self, root, reply, before):
         text = self.result_text(root, "AI-DISCLOSURE.md")
@@ -258,7 +260,38 @@ class ProjectDisclosure(Fixture):
         rl = reply.lower()
         add(self.checks_listed[9], "pending" in rl and "accepted the run" not in rl)
         add(self.checks_listed[10], tree_hashes(root) == before)
+        add(self.checks_listed[11], *self.form_check(t))
         return out
+
+    def form_check(self, t):
+        low = t.lower()
+        appendix = re.search(r"^#+\s*.*appendix", t, re.I | re.M) is not None
+        m = re.search(r"^#+\s*.*timeline.*$", t, re.I | re.M)
+        if not m:
+            return False, "no timeline heading"
+        tail = t[m.end():]
+        nxt = re.search(r"^#+\s", tail, re.M)
+        body = tail[:nxt.start()] if nxt else tail
+        items = [ln for ln in body.splitlines() if re.match(r"\s*(?:[-*]|\d+[.)]|\|)", ln) and not re.match(r"\s*\|[-\s|:]+\|?\s*$", ln)]
+        return (len(items) <= 15 and not appendix and "--detailed" in t,
+                f"timeline lines: {len(items)}; appendix heading: {appendix}; offers --detailed: {'--detailed' in t}")
+
+
+class ProjectDisclosureDetailed(ProjectDisclosure):
+    name = "project-disclosure-detailed"
+    form = "detailed"
+    checks_listed = ProjectDisclosure.checks_listed[:11] + (
+        "detailed form: a per-session checklist and a prompt appendix holding the prompt text",
+    )
+
+    def prompt(self, root):
+        return ("Use the project-disclosure skill with the argument --detailed to draft the detailed AI-use "
+                "disclosure for this project. " + self.TAIL)
+
+    def form_check(self, t):
+        appendix = re.search(r"^#+\s*.*appendix", t, re.I | re.M) is not None
+        prompts = "Plot the decay curve" in t and "log transform" in t and "Summarise the repository layout" in t
+        return appendix and prompts, f"appendix heading: {appendix}; prompt text present: {prompts}"
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -1314,7 +1347,7 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), ProjectDisclosureDetailed(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
                                       LiteratureSearch(), LiteratureSearchExternal())}
 
 

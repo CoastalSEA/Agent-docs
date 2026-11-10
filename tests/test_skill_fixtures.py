@@ -73,7 +73,7 @@ class ProjectDisclosureFixture(Base):
     GOOD = ("Sessions: Plot the decay curve (2026-03-02, claude-sonnet-5-5, permission mode default); log transform "
             "(2026-03-09, claude-opus-5-5, auto then default, analysis subfolder; Write notes.md attempted, refused); "
             "Summarise the repository layout (2026-03-16, permission mode MISSING for the subagent). A prompt held a "
-            "secret and was redacted.")
+            "secret and was redacted.\n\n## Timeline\n\n- 2026-03-02 plot written\n- 2026-03-09 fit changed\n\nAdd --detailed for the checklist.")
 
     def results(self, reply="The run is pending review."):
         return {n: ok for n, ok, _ in self.fx.check(self.root, reply, self.fx.before)}
@@ -112,6 +112,29 @@ class ProjectDisclosureFixture(Base):
         for text, check in cases:
             self.write(text)
             self.assertFalse(self.results()[check], check)
+
+    def test_short_form_checks(self):
+        short = self.fx.checks_listed[11]
+        self.write(self.GOOD)
+        self.assertTrue(self.results()[short])
+        self.write(self.GOOD + "\n## Prompt appendix\n")
+        self.assertFalse(self.results()[short])
+        self.write(self.GOOD.replace("--detailed", "more"))
+        self.assertFalse(self.results()[short])
+        self.write(self.GOOD + "".join(f"- 2026-03-{d:02d} event\n" for d in range(10, 30)))
+        self.assertFalse(self.results()[short])
+
+    def test_detailed_form_check(self):
+        fx = rf.ProjectDisclosureDetailed()
+        self.assertEqual(fx.checks_listed[:11], self.fx.checks_listed[:11])
+        full = self.GOOD + "\n## Prompt appendix\n\nPlot the decay curve; log transform; Summarise the repository layout\n"
+        self.write(full)
+        res = {n: ok for n, ok, _ in fx.check(self.root, "The run is pending review.", self.fx.before)}
+        self.assertTrue(all(res.values()), [n for n, ok in res.items() if not ok])
+        self.write(self.GOOD)
+        res = {n: ok for n, ok, _ in fx.check(self.root, "The run is pending review.", self.fx.before)}
+        self.assertFalse(res[fx.checks_listed[11]])
+        self.assertIn("--detailed", fx.prompt(self.root))
 
     def test_missing_file_extra_file_and_reply(self):
         self.assertFalse(self.results()[self.fx.checks_listed[0]])
