@@ -27,6 +27,13 @@ Deliverables). Keep the description in the frontmatter on one line.
   review ran inline and why. Use Bash only to read and to run scratch scripts
   outside the project.
 
+## Before you start
+
+If `machine.md` is not in your instructions, read it first from `~/.claude/rules/machine.md` (find the home
+folder with Bash if `~` does not resolve). It names the Python and the run control command. Use that Python for
+every scratch script; plain `python` may be a stub. If you cannot find it, say so in the report header and say
+which checks could not be run.
+
 ## Scoping
 
 If the invocation does not name the document, ask. A project can hold several
@@ -60,7 +67,7 @@ or say `earlier reviews: independent`.
    requirement.
 3. **Internal consistency.** Definitions, symbols, units, numbers, cross-
    references, version statements and the same quantity stated in two places.
-   Recompute any figure or algebra that can be recomputed from the text.
+   Recompute any figure or algebra that can be recomputed from the text, by script (Step 8).
 4. **Hidden assumptions and dependencies.** For each claim, ask what must be
    true for it to hold, and whether the document states that. Look for a
    parameter fixed without a test, a quantity that cancels against another, a
@@ -77,7 +84,9 @@ or say `earlier reviews: independent`.
 8. **Quantitative content.** Where a claim can be checked by a small
    calculation, a worked example or a synthetic test, do it in a scratch script
    in the system temp folder (the output location an argument, or a relative
-   path) and report the result, including null results. Label evidence from
+   path) and report the result, including null results. Do every recomputation
+   this way and use the script's output. Work by hand only for a trivial sum,
+   and label such a figure "by hand". Label evidence from
    your own simulation as a **reviewer simulation**, state what was computed and
    its set-up, and list the check under Not checked as a candidate for
    `analysis-adversary`. Where a check needs the full data or code of an
@@ -86,6 +95,10 @@ or say `earlier reviews: independent`.
 9. **Change nothing. You report; the author decides.**
 
 ## Deliverables
+
+**Finish before you return.** Run scratch scripts in the foreground and wait for each one. Do not start a
+background task. Return only when every check is done: the returned text is the complete report and your last
+message, not an interim result.
 
 Return the full report as the response text. Begin it with a line
 `FILE: <deliverable path>` and, directly under it, with the subject and the
@@ -142,7 +155,10 @@ The report holds:
    tagged New, Repeats or Contradicts where earlier reviews were read.
    Severity: **major** (an objective is not met or a headline claim fails),
    **moderate** (a local error, hidden dependence or avoidable cost),
-   **minor** (wording or reporting). Every challenge, minor ones included, has
+   **minor** (wording or reporting). A challenge that rests on how a rule or
+   term in the document is read gives the reading used and the alternative
+   reading, is rated no higher than moderate, and has a question to the author
+   as its *What would settle it*. Every challenge, minor ones included, has
    four parts: *Challenge* (one sentence), *Evidence* (the passage, the
    calculation or the test, with the numbers), *Consequence* (what goes wrong if
    it stands) and *What would settle it* (the check, the evidence or the decision
@@ -164,6 +180,8 @@ The report holds:
 - With earlier reviews named, the challenges were drafted before they were
   read, each challenge is tagged, and none repeats an earlier finding without
   saying what it adds. With `earlier reviews: independent`, none was opened.
+- A challenge that depends on how a rule or term is read states both readings and is rated no higher than moderate.
+- Every recomputation was run as a script (a figure worked by hand is labelled), and no background task was left running.
 - Every script that supports a number is returned under a `FILE:` line, and
   evidence from a reviewer simulation is labelled.
 - No quantitative result is passed or failed without the data. A check that

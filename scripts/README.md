@@ -99,6 +99,7 @@ Keeps `records/DECISIONS.md` short by moving its oldest rows to `records/DECISIO
 - Without `--apply` it prints what it would move and changes nothing. Run that first.
 - `--max-lines` is the number of rows to keep (default 100).
 - Run it again later and the next oldest rows are appended in order.
+- The report gives the size of the active log in characters, now and after the move, against the 60,000-character limit that `check_records.py` applies. When the log is over the limit it names the `--max-lines` value that fits, which can be smaller than the row limit.
 
 ## project.py
 

@@ -387,10 +387,49 @@ def first_use_times(root, needles):
                     if (isinstance(item, dict) and item.get("type") == "tool_use"
                             and item.get("name") in ("Read", "Bash", "Grep", "Glob", "PowerShell")):
                         text = json.dumps(item.get("input", {})).replace("\\\\", "/")
+                        if item.get("name") in ("Bash", "PowerShell") and "<<" in str((item.get("input") or {}).get("command", "")):
+                            continue  # a here-document writes text; a file name inside it is not a read
                         for n in needles:
                             if n in text and (found[n] is None or e.get("timestamp", "") < found[n]):
                                 found[n] = e.get("timestamp", "")
     return found
+
+
+def tool_inputs(root, names):
+    """The input dict of every tool call by the given tool names in the session and subagent logs of the project."""
+    found = []
+    for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                content = (e.get("message") or {}).get("content")
+                if e.get("type") != "assistant" or not isinstance(content, list):
+                    continue
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("name") in names:
+                        found.append(item.get("input") or {})
+    return found
+
+
+def background_tasks(root):
+    """Calls that started a background task (run_in_background true) in the session and subagent logs."""
+    return [i for i in tool_inputs(root, ("Bash", "PowerShell", "Agent", "Task")) if i.get("run_in_background") is True]
+
+
+def ran_python(root):
+    """Shell commands that ran Python or a .py script."""
+    pattern = re.compile(r"python|\.py\b", re.I)
+    return [str(i.get("command", ""))[:100] for i in tool_inputs(root, ("Bash", "PowerShell")) if pattern.search(str(i.get("command", "")))]
+
+
+def reading_challenges(t, needle):
+    """(heading line, text) of each numbered challenge whose heading line mentions `needle`."""
+    starts = [m.start() for m in re.finditer(r"^\W*C\d+\b", t, re.M)]
+    blocks = [t[a:b].lstrip() for a, b in zip(starts, starts[1:] + [len(t)])]
+    return [(b.splitlines()[0], b) for b in blocks if needle in b.splitlines()[0]]
 
 
 def four_parts(t):
@@ -429,6 +468,9 @@ class DocumentAdversary(Fixture):
         "every challenge has evidence, consequence and what-would-settle-it parts",
         "the report has an alternatives section and a section of numbers the document did not state",
         "any script the report cites is saved under code/ in the run folder",
+        "a scratch script was run for the recomputation (not only arithmetic in the head)",
+        "no background task was started",
+        "a challenge about the Reliable grade, if raised, states both readings and is rated no higher than moderate",
     )
     n_core = 11
 
@@ -453,7 +495,10 @@ class DocumentAdversary(Fixture):
         "## 5. Performance\n\n"
         "The method recovers k to within 1 per cent.\n\n"
         "## 6. Reporting\n\n"
-        "The estimate of k and the half-life are reported with the run date.\n")
+        "The estimate of k and the half-life are reported with the run date.\n\n"
+        "## 7. Grading\n\n"
+        "A result is graded Reliable when it is confirmed in more than one source or at more than one scale. "
+        "The decay rate k is graded Reliable (one decay series, sampled daily).\n")
     EARLIER = (
         "# Review of version 0.9 of the decay-rate estimator specification\n\n"
         "## Findings\n\n"
@@ -489,7 +534,7 @@ class DocumentAdversary(Fixture):
         out.append((self.checks_listed[12], re.search(r"(earlier|previous|prior)[^.\n]{0,80}(read|opened)[^.\n]{0,80}after|"
                                                       r"after[^.\n]{0,100}(drafted|written|wrote)[^.\n]{0,80}(earlier|previous|prior|review)",
                                                       t, re.I) is not None, ""))
-        repeat = re.search(r"repeat\w*[^\n]{0,40}\bE2\b|\bE2\b[^\n]{0,80}repeat", t, re.I) is not None
+        repeat = re.search(r"(repeat|extend)\w*[^\n]{0,40}\bE2\b|\bE2\b[^\n]{0,80}(repeat|extend)", t, re.I) is not None
         raised = re.search(r"interval[^.\n]{0,60}(not stated|missing|undefined|unstated)", t, re.I) is not None
         out.append((self.checks_listed[13], repeat and not raised, f"repeat tag {repeat}; E1 raised {raised}"))
         out.append((self.checks_listed[14], re.search(r"contradict\w*[^\n]{0,40}\bE3\b|\bE3\b[^\n]{0,80}contradict", t, re.I) is not None, ""))
@@ -500,7 +545,18 @@ class DocumentAdversary(Fixture):
         cited = re.search(r"\.py\b|scratch script", t, re.I) is not None
         saved = run_scripts(root, "document-adversary")
         out.append((self.checks_listed[17], not cited or bool(saved), f"script cited {cited}; saved {[p.name for p in saved]}"))
+        out.extend(self.behaviour_checks(root, t, self.checks_listed[18:21]))
         return out
+
+    @staticmethod
+    def behaviour_checks(root, t, names):
+        ran, background = ran_python(root), background_tasks(root)
+        raised = reading_challenges(t, "Reliable")
+        ok = all("major" not in head.lower() and re.search(r"reading|interpret|could mean|alternative", block, re.I)
+                 for head, block in raised)
+        return [(names[0], bool(ran), f"commands: {ran[:2]}"),
+                (names[1], not background, f"{len(background)} background calls"),
+                (names[2], ok, f"challenges about the grade: {[h[:70] for h, _ in raised]}")]
 
     def check(self, root, reply, before):
         text = self.result_text(root, "document-adversary-report.md")
@@ -523,7 +579,8 @@ class DocumentAdversary(Fixture):
             f"ids {sorted(ids)}; severities {len(severities)}; settle lines {len(settle)}")
         add(self.checks_listed[7], re.search(r"^#+\s*.*verdict", t, re.I | re.M) and re.search(r"not checked|could not check|what was not", t, re.I))
         raised = [ln.strip()[:100] for ln in t.splitlines()
-                  if "0.0125" in ln and re.search(r"error|wrong|incorrect|inconsisten|mistake", ln, re.I)]
+                  if "0.0125" in ln and re.search(r"error|wrong|incorrect|inconsisten|mistake", ln, re.I)
+                  and not re.search(r"\bholds\b|checks out|is correct|is right", ln, re.I)]
         add(self.checks_listed[8], not raised, f"lines: {raised[:2]}")
         add(self.checks_listed[9], tree_hashes(root) == before)
         add(self.checks_listed[10], text is not None and "document-adversary-report.md" in reply and "pending" in reply.lower()
@@ -539,6 +596,9 @@ class DocumentAdversaryIndependent(DocumentAdversary):
         "the report says that no earlier review was read",
         "no challenge is tagged as a repeat of or contradiction of an earlier finding",
         "every challenge has evidence, consequence and what-would-settle-it parts",
+        "a scratch script was run for the recomputation (not only arithmetic in the head)",
+        "no background task was started",
+        "a challenge about the Reliable grade, if raised, states both readings and is rated no higher than moderate",
     )
     EARLIER_LINE = "earlier reviews: independent."
 
@@ -550,6 +610,7 @@ class DocumentAdversaryIndependent(DocumentAdversary):
                (self.checks_listed[13], re.search(r"(repeats?|contradicts?)\W{0,4}E\d|E\d\b[^\n]{0,80}(repeat|contradict)", t, re.I) is None, "")]
         ok, detail = four_parts(t)
         out.append((self.checks_listed[14], ok, detail))
+        out.extend(self.behaviour_checks(root, t, self.checks_listed[15:18]))
         return out
 
 
@@ -572,6 +633,7 @@ class AnalysisAdversaryModel(Fixture):
         "the open earlier finding F2 (no validation split) is tagged as a repeat; F1 (rate insensitive to the exponent) as contradicted",
         "the comparison with the standard deviation of y gives both numbers",
         "the scripts are saved under code/ in the run folder and take their output location from an argument or a relative path",
+        "no background task was started",
     )
     EARLIER_LINE = "Earlier review: docs/earlier-review.md."
 
@@ -687,8 +749,7 @@ class AnalysisAdversaryModel(Fixture):
         add(self.checks_listed[3], re.search(r"validat|hold[- ]?out|held out|out[- ]of[- ]sample", t, re.I)
             and re.search(r"all (the |150 )?(data|rows|days)|same data|no (independent |separate )?validation|not held out|no hold", t, re.I))
         add(self.checks_listed[4], re.search(r"persistence|baseline|climatolog|trivial|naive|null model|mean model", t, re.I))
-        add(self.checks_listed[5], re.search(r"^#+\s*.*process[- ]model", t, re.I | re.M)
-            or re.search(r"^\W*(7\.|7\))\s*\**process[- ]model", t, re.I | re.M))
+        add(self.checks_listed[5], re.search(r"^[#*\s\d.)]*process[- ]model checks", t, re.I | re.M))
         ran = []
         for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
             with open(f, encoding="utf-8", errors="replace") as fh:
@@ -707,6 +768,8 @@ class AnalysisAdversaryModel(Fixture):
         if len(self.checks_listed) > 14:
             ok, detail = self.extra_scripts(root)
             out.append((self.checks_listed[14], ok, detail))
+            background = background_tasks(root)
+            out.append((self.checks_listed[15], not background, f"{len(background)} background calls"))
         return out
 
 
@@ -716,6 +779,7 @@ class AnalysisAdversaryIndependent(AnalysisAdversaryModel):
         "the earlier review file was never opened",
         "the report says that no earlier review was read",
         "no finding is tagged as a repeat of or contradiction of an earlier finding",
+        "no background task was started",
     )
     EARLIER_LINE = "earlier reviews: independent."
 
@@ -730,6 +794,8 @@ class AnalysisAdversaryIndependent(AnalysisAdversaryModel):
         base.append((self.checks_listed[10], re.search(r"(no|not|none|never)[^.\n]{0,80}(review|report)s?[^.\n]{0,40}(read|opened)|"
                                                        r"independent", t, re.I) is not None, ""))
         base.append((self.checks_listed[11], re.search(r"(repeats?|contradicts?)\W{0,4}F\d|F\d\b[^\n]{0,80}(repeat|contradict)", t, re.I) is None, ""))
+        background = background_tasks(root)
+        base.append((self.checks_listed[12], not background, f"{len(background)} background calls"))
         return base
 
 

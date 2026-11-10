@@ -261,6 +261,40 @@ class AdversaryLogHelpers(Base):
         self.assertEqual(found["review.md"], "2026-11-10T10:05:00Z")
         self.assertIsNone(found["absent.md"])
 
+    def test_background_python_and_reading_helpers(self):
+        root = (self.work / "Q").resolve()
+        root.mkdir()
+        folder = self.home / "projects" / rf.project_key(root)
+
+        def call(name, **inputs):
+            return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inputs}]}}
+
+        rf.jsonl(folder / "s.jsonl", [call("Bash", command="ls"), call("Bash", command="python3 check.py"),
+                                       call("Bash", command="sleep 1", run_in_background=True),
+                                       call("Read", file_path="x")])
+        self.assertEqual(len(rf.background_tasks(root)), 1)
+        self.assertEqual(rf.ran_python(root), ["python3 check.py"])
+        text = "**C1 (major).** One Reliable item.\n- reading: x\n\n**C2 (minor).** Other.\n"
+        found = rf.reading_challenges(text, "Reliable")
+        self.assertEqual(len(found), 1)
+        self.assertIn("C1", found[0][0])
+        elsewhere = "**C1 (major).** Coverage.\n- a Reliable grade is mentioned in passing\n\n**C2 (minor).** Other.\n"
+        self.assertEqual(rf.reading_challenges(elsewhere, "Reliable"), [])
+
+    def test_a_here_document_is_not_a_read(self):
+        root = (self.work / "H").resolve()
+        root.mkdir()
+        folder = self.home / "projects" / rf.project_key(root)
+
+        def call(command):
+            return {"type": "assistant", "timestamp": "t", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}
+
+        rf.jsonl(folder / "s.jsonl", [call("cat > report.md <<'EOF'\nnot read: docs/review.md\nEOF")])
+        self.assertIsNone(rf.first_use_times(root, ["docs/review.md"])["docs/review.md"])
+        rf.jsonl(folder / "s.jsonl", [call("cat docs/review.md")])
+        self.assertEqual(rf.first_use_times(root, ["docs/review.md"])["docs/review.md"], "t")
+
     def test_four_parts(self):
         full = "".join(f"**C{i}.** Challenge. Evidence here. Consequence here. What would settle it: x.\n" for i in (1, 2, 3))
         self.assertTrue(rf.four_parts(full)[0])
@@ -277,6 +311,12 @@ class DocumentAdversaryFixture(Base):
         self._orig = rf.first_use_times
         rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
         self.addCleanup(setattr, rf, "first_use_times", self._orig)
+        self.ran, self.background = ["python x.py"], []
+        self._ran, self._bg = rf.ran_python, rf.background_tasks
+        rf.ran_python = lambda root: self.ran
+        rf.background_tasks = lambda root: self.background
+        self.addCleanup(setattr, rf, "ran_python", self._ran)
+        self.addCleanup(setattr, rf, "background_tasks", self._bg)
 
     def write(self, text, script=None):
         folder = self.root / "outputs" / "document-adversary-decay-spec-101126-run1"
@@ -319,6 +359,27 @@ class DocumentAdversaryFixture(Base):
         self.assertIn("E2", earlier)
         self.assertIn("3.5 days", earlier)
         self.assertIn("review-v0.9.md", self.fx.prompt(self.root))
+        self.assertIn("graded Reliable when it is confirmed in more than one source", spec)
+
+    def test_the_behaviour_checks(self):
+        c = self.fx.checks_listed
+        self.write(self.GOOD)
+        self.assertTrue(self.results()[c[18]] and self.results()[c[19]] and self.results()[c[20]])
+        self.ran = []
+        self.assertFalse(self.results()[c[18]])
+        self.ran = ["python x.py"]
+        self.background = [{"run_in_background": True}]
+        self.assertFalse(self.results()[c[19]])
+        self.background = []
+        major = self.GOOD + "\n**C5 (major).** The Reliable grade breaks the rule. Reading: both sources. Alternative reading: a label.\n"
+        self.write(major)
+        self.assertFalse(self.results()[c[20]])
+        no_reading = self.GOOD + "\n**C5 (moderate).** The Reliable grade is wrong because there is one series.\n"
+        self.write(no_reading)
+        self.assertFalse(self.results()[c[20]])
+        both = self.GOOD + "\n**C5 (moderate).** The Reliable grade. Reading used: a requirement. Alternative reading: a label.\n"
+        self.write(both)
+        self.assertTrue(self.results()[c[20]])
 
     def test_a_good_report_passes_every_check(self):
         self.write(self.GOOD)
@@ -335,8 +396,9 @@ class DocumentAdversaryFixture(Base):
             (self.GOOD.replace("What would settle it", "Note"), 6),
             (self.GOOD.replace("## Not checked", "## Other").replace("Source papers.", ""), 7),
             (self.GOOD + "\n**C5 (minor).** The 0.0125 per hour value is wrong.\n", 8),
+            (self.GOOD + "\n0.0125 is the wrong unit for a half-life.\n", 8),
             (self.GOOD.replace("after the challenges were drafted", "at the start"), 12),
-            (self.GOOD.replace("Repeats E2", "New"), 13),
+            (self.GOOD.replace("Repeats E2; adds a fit with an offset.", "New."), 13),
             (self.GOOD + "The sampling interval is not stated.\n", 13),
             (self.GOOD.replace("Contradicts E3", "New"), 14),
             (self.GOOD.replace("Consequence", "Result", 1), 15),
@@ -403,7 +465,17 @@ class DocumentAdversaryIndependentFixture(DocumentAdversaryFixture):
         self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
 
     def test_reading_order_and_saved_scripts(self):
-        self.assertEqual(len(self.fx.checks_listed), 15)
+        self.assertEqual(len(self.fx.checks_listed), 18)
+
+    def test_the_behaviour_checks(self):
+        c = self.fx.checks_listed
+        self.write(self.GOOD)
+        self.assertTrue(self.results()[c[15]] and self.results()[c[16]] and self.results()[c[17]])
+        self.ran = []
+        self.assertFalse(self.results()[c[15]])
+        self.ran = ["python x.py"]
+        self.background = [{"run_in_background": True}]
+        self.assertFalse(self.results()[c[16]])
 
     def test_missing_report_changed_file_and_reply(self):
         self.assertFalse(self.results()[self.fx.checks_listed[0]])
@@ -418,6 +490,10 @@ class AnalysisAdversaryModelFixture(Base):
         self._orig = rf.first_use_times
         rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
         self.addCleanup(setattr, rf, "first_use_times", self._orig)
+        self.background = []
+        self._bg = rf.background_tasks
+        rf.background_tasks = lambda root: self.background
+        self.addCleanup(setattr, rf, "background_tasks", self._bg)
 
     def write(self, text, script="repro.py", content="import sys\nout = sys.argv[1]\n"):
         folder = self.root / "outputs" / "analysis-adversary-relaxation-rate-101126-run1"
@@ -475,6 +551,17 @@ class AnalysisAdversaryModelFixture(Base):
             self.write(text)
             self.assertFalse(self.results()[self.fx.checks_listed[i]], (i, self.fx.checks_listed[i]))
 
+    def test_a_bold_label_counts_as_the_process_model_section(self):
+        bold = self.GOOD.replace("## 7. Process-model checks", "**Process-model checks (item 7).**")
+        self.write(bold)
+        self.assertTrue(self.results()[self.fx.checks_listed[5]])
+
+    def test_a_background_task_is_caught(self):
+        self.write(self.GOOD)
+        self.assertTrue(self.results()[self.fx.checks_listed[15]])
+        self.background = [{"run_in_background": True}]
+        self.assertFalse(self.results()[self.fx.checks_listed[15]])
+
     def test_order_and_scripts(self):
         self.write(self.GOOD)
         self.times["earlier-review.md"] = "09:00"
@@ -504,6 +591,10 @@ class AnalysisAdversaryIndependentFixture(Base):
         self._orig = rf.first_use_times
         rf.first_use_times = lambda root, needles: {n: self.times.get(n) for n in needles}
         self.addCleanup(setattr, rf, "first_use_times", self._orig)
+        self.background = []
+        self._bg = rf.background_tasks
+        rf.background_tasks = lambda root: self.background
+        self.addCleanup(setattr, rf, "background_tasks", self._bg)
 
     def write(self, text):
         folder = self.root / "outputs" / "analysis-adversary-relaxation-rate-101126-run1"
@@ -531,6 +622,9 @@ class AnalysisAdversaryIndependentFixture(Base):
         self.write(self.GOOD)
         self.times["earlier-review.md"] = "10:00"
         self.assertFalse(self.results()[self.fx.checks_listed[9]])
+        self.times = {}
+        self.background = [{"run_in_background": True}]
+        self.assertFalse(self.results()[self.fx.checks_listed[12]])
 
 
 class Preflight(unittest.TestCase):

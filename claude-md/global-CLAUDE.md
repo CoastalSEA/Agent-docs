@@ -31,7 +31,7 @@ Each of the two files has a line that starts with `Marker:` near its top. If you
 - Start each run with the run control command in `machine.md` (`start <task>`, with `--root <project root>`). A project that still holds its own `code/run_control.py` may use that copy; skills always use the machine command. A new run is pending until the user reviews it (`git diff`, run control `check <task>`).
 - Only the user accepts, rejects (keeps but does not adopt) or discards a run. Then run the run control command `accept`, `reject` or `discard` for that task; they commit, tag and update `outputs/INDEX.md` if the project keeps one, or restore the folder. Reports cite the run tag.
 - Downloaded sources (papers, reports, fetched data) are inputs. Save them in the git-ignored `sources/` folder in the project root, never in `outputs/`.
-- Ask before pushing commits that hold outputs to a remote.
+- Push commits that hold outputs to a remote only when the user has asked for the push.
 - If the project is not a git repository, or `outputs/` itself is git-ignored, each run gets a new folder `outputs/<task name>-<DDMMYY>-run<N>/` and the git steps do not apply.
 
 ## Methodological guardrails
@@ -61,6 +61,7 @@ Subagent Write calls are refused for `.md` files whose names begin with report, 
 - Never create, edit, or delete a bibliography entry. Flag problems; don't fix them.
 - Never touch files supplied as input data. Cleaning happens downstream, in scripts.
 - Ask before any step that sends data off this machine or changes a live system.
+- A direct instruction to do a named step (for example "push" or "deploy") is the permission for that step. Do not ask again in chat: a permission prompt, if one appears, is the confirmation. Ask again only if the step differs from the request: another remote or branch, commits or files the user has not seen, or a step the user did not ask for.
 
 ## What done means
 

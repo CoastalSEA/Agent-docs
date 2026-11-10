@@ -419,6 +419,39 @@ class RotateRecords(Project):
         self.assertEqual((self.root / "records" / "DECISIONS.md").read_bytes(), before)
         self.assertFalse((self.root / "records" / "DECISIONS-archive.md").exists())
 
+    def test_the_report_gives_characters_now_and_after_and_the_rows_that_fit(self):
+        rows = decision_rows(1, 100, size=900)
+        self.write_log(rows)
+        text = (self.root / "records" / "DECISIONS.md").read_text(encoding="utf-8")
+        r = self.rot()
+        self.assertIn(f"The log is {len(text)} characters (limit 60000)", r.stdout)
+        self.assertIn("Over the character limit", r.stdout)
+        fit = int(re.search(r"run with --max-lines (\d+)", r.stdout).group(1))
+        self.assertLess(fit, 100)
+        moved = self.rot("--max-lines", str(fit))
+        self.assertIn(f"The active log is {len(text)} characters now and", moved.stdout)
+        after = int(re.search(r"characters now and (\d+) after", moved.stdout).group(1))
+        self.assertLessEqual(after, 60000)
+        self.assertNotIn("Still over", moved.stdout)
+        self.assertEqual(self.rot("--max-lines", str(fit), "--apply").returncode, 0)
+        written = (self.root / "records" / "DECISIONS.md").read_text(encoding="utf-8")
+        self.assertEqual(len(written), after)
+        self.assertEqual(len(self.rows("DECISIONS.md")), fit)
+        self.assertLessEqual(len(self.rows("DECISIONS.md")), 100)
+
+    def test_a_row_count_that_is_too_large_is_reported_as_still_over(self):
+        self.write_log(decision_rows(1, 100, size=900))
+        r = self.rot("--max-lines", "99")
+        self.assertIn("Still over the character limit", r.stdout)
+        self.assertIn("use --max-lines", r.stdout)
+
+    def test_the_size_counts_a_crlf_line_ending_as_one_character(self):
+        self.write_log(decision_rows(1, 5), nl=CRLF)
+        with open(self.root / "records" / "DECISIONS.md", encoding="utf-8", newline="") as f:
+            raw = f.read()
+        r = self.rot()
+        self.assertIn(f"The log is {len(raw.replace(CRLF, NL))} characters", r.stdout)
+
     def test_apply_moves_the_oldest_rows_and_loses_none(self):
         original = decision_rows(1, 120)
         self.write_log(original)

@@ -12,6 +12,8 @@ Usage: rotate_records.py [--root <project root>] [--max-lines N] [--apply] [--ve
   Without --apply the script prints what it would move and changes nothing.
   --root may stand anywhere in the command line; the default is the current folder.
 Inputs:  records/DECISIONS.md.
+         The report gives the size of the active log in characters, now and after the move, against the 60,000
+         limit that check_records.py applies, and the number of rows to keep to get under it.
 Outputs: with --apply, records/DECISIONS-archive.md (created with a header if missing, otherwise
          appended to) and the shortened records/DECISIONS.md. Line endings of each file are kept.
 Exit:    0 on success or when nothing needs to move; 1 with a message on stderr on any problem.
@@ -23,7 +25,8 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
+MAX_CHARS = 60000  # characters in DECISIONS.md, as check_records.py counts them
 ROW = re.compile(r"^\| \d{6} \|")
 ARCHIVE_HEAD = (
     "# Decisions archive{nl}{nl}"
@@ -59,6 +62,22 @@ def rows_of(lines):
     return [ln for ln in lines if ROW.match(ln)]
 
 
+def chars(lines):
+    """Characters in a log as check_records.py counts them: a line ending counts as one."""
+    return len("".join(lines).replace("\r\n", "\n"))
+
+
+def rows_to_fit(lines, limit=MAX_CHARS):
+    """(largest number of newest rows whose log fits in `limit` characters, the size then), or (0, size) if none fits."""
+    positions = [i for i, ln in enumerate(lines) if ROW.match(ln)]
+    for keep_rows in range(len(positions), 0, -1):
+        dropped = set(positions[:len(positions) - keep_rows])
+        size = chars([ln for i, ln in enumerate(lines) if i not in dropped])
+        if size <= limit:
+            return keep_rows, size
+    return 0, chars([ln for i, ln in enumerate(lines) if not ROW.match(ln)])
+
+
 def write_atomic(path, text):
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8", newline="") as f:
@@ -88,7 +107,13 @@ def main(argv):
     rows = rows_of(lines)
     extra = len(rows) - args.max_lines
     if extra <= 0:
-        print(f"{len(rows)} rows in records/DECISIONS.md, at most {args.max_lines}: nothing to move.")
+        size = chars(lines)
+        print(f"{len(rows)} rows in records/DECISIONS.md, at most {args.max_lines}: nothing to move. "
+              f"The log is {size} characters (limit {MAX_CHARS}).")
+        if size > MAX_CHARS:
+            fit, fit_size = rows_to_fit(lines)
+            print(f"Over the character limit. Keeping the newest {fit} rows ({fit_size} characters) would fit: "
+                  f"run with --max-lines {fit}.")
         return 0
     moving = [i for i, ln in enumerate(lines) if ROW.match(ln)][:extra]
     moved_lines = [lines[i] for i in moving]
@@ -96,6 +121,12 @@ def main(argv):
     first, last = moved_lines[0][2:8], moved_lines[-1][2:8]
     print(f"{len(rows)} rows in records/DECISIONS.md; keeping the newest {args.max_lines}.")
     print(f"Moving {extra} rows (dated {first} to {last}) to {archive.relative_to(root)}.")
+    after = chars(keep)
+    print(f"The active log is {chars(lines)} characters now and {after} after (limit {MAX_CHARS}).")
+    if after > MAX_CHARS:
+        fit, fit_size = rows_to_fit(lines)
+        print(f"Still over the character limit. Keeping the newest {fit} rows ({fit_size} characters) would fit: "
+              f"use --max-lines {fit}.")
     if not args.apply:
         print("Nothing written. Run again with --apply to move them.")
         return 0

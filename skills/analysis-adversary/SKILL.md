@@ -45,6 +45,13 @@ finds itself running this text without a fork.
   instruction, use Bash only to read and to run your own scratch scripts outside
   the project, and change nothing under review.
 
+## Before you start
+
+If `machine.md` is not in your instructions, read it first from `~/.claude/rules/machine.md` (find the home
+folder with Bash if `~` does not resolve). It names the Python and the run control command. Use that Python for
+every scratch script; plain `python` may be a stub. If you cannot find it, say so in the report header and say
+which checks could not be run.
+
 ## Scoping
 
 If the invocation does not say which result, dataset and write-up (if any) to
@@ -219,6 +226,10 @@ numbers, or not done, with the reason. Do not leave a check out of the list.
 
 ## Deliverables
 
+**Finish before you return.** Run scratch scripts in the foreground and wait for each one. Do not start a
+background task. Return only when every check is done: the returned text is the complete report and your last
+message, not an interim result.
+
 The skill's subagent has no `Write` tool, deliberately, and must not write the
 report file by shell either. Return the full report as the response text.
 **Begin that text with a line `FILE: <deliverable path>`**, so the session that
@@ -311,6 +322,7 @@ The report, whether returned as text or saved, covers:
   gives both numbers and the base they are measured on.
 - With earlier reviews named, the findings were drafted before they were read and
   each is tagged; with `earlier reviews: independent`, none was opened.
+- Every figure was computed by a script, and no background task was left running.
 - Every script that supports a number is returned under a `FILE:` line, and its
   output location is an argument or a relative path.
 - When uncertain, the report names a problem rather than issuing a clean bill of
