@@ -741,5 +741,280 @@ class DocxSkillReport(Base):
         self.assertFalse(rf.CitationCheck.uses_docx_skill)
 
 
+class SyntheticLibraryHelpers(Base):
+    def test_a_pdf_is_valid_and_its_text_can_be_read(self):
+        path = self.work / "t.pdf"
+        rf.make_pdf(path, ["First line (with brackets)", "Second line"])
+        self.assertTrue(path.read_bytes().startswith(b"%PDF-1.4"))
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            self.skipTest("pypdf is not installed here")
+        text = "\n".join(page.extract_text() for page in PdfReader(str(path)).pages)
+        self.assertIn("First line (with brackets)", text)
+        self.assertIn("Second line", text)
+
+    def test_the_enl_file_is_the_database_and_the_pdf_is_linked(self):
+        import sqlite3
+        lib = rf.SyntheticLibrary()
+        path = lib.make_library(self.work, [{"author": "A, B", "year": "2000", "title": "T", "electronic_resource_number": "10.1/x"}],
+                                pdfs={1: ("A2000.pdf", ["text"])})
+        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        self.assertEqual(con.execute("select title, electronic_resource_number from refs where id = 1").fetchone(), ("T", "10.1/x"))
+        self.assertEqual(con.execute("select refs_id, file_path from file_res").fetchall(), [(1, "A2000.pdf")])
+        con.close()
+        self.assertTrue((path.with_suffix(".Data") / "PDF" / "A2000.pdf").is_file())
+        self.assertEqual(sorted(lib._library_hashes()), ["PDF/A2000.pdf", "Synthetic.enl"])
+        self.assertTrue(json.loads(lib.mcp_config.read_text(encoding="utf-8"))["mcpServers"]["endnote"]["env"]["ENDNOTE_LIBRARY_PATH"])
+
+    def test_short_author_forms_and_missing_packages(self):
+        self.assertEqual(rf.short_author({"author": "Marlow, T\rOkoro, E"}), "Marlow and Okoro")
+        self.assertEqual(rf.short_author({"author": "Quill, R"}), "Quill")
+        self.assertEqual(rf.short_author({"author": "A, B\rC, D\rE, F"}), "A et al.")
+        self.assertEqual(rf.short_author({"author": "A, B\rC, D\rE, F", "display": "Custom"}), "Custom")
+        with self.assertRaises(rf.Skip):
+            rf.require_server_packages("no_such_package_for_the_fixture")
+
+    def test_verdict_lines_and_tool_calls(self):
+        lines = ["| tidal pumping | Overstated |", "| mouth | Not supported |", "| spring tides | Supported |"]
+        self.assertTrue(rf.verdict_line(lines, "tidal pumping", "overstated"))
+        self.assertFalse(rf.verdict_line(lines, "mouth", rf.NOT_SUPPORTED), "'Not supported' is not Supported")
+        self.assertTrue(rf.verdict_line(lines, "spring", rf.NOT_SUPPORTED))
+        self.assertFalse(rf.verdict_line(lines, "spring", "supported", exclude="spring"))
+        write_transcript(self.home, self.work, [tool_call("WebFetch", url="https://a.example/x", note=["y"])])
+        self.assertEqual(rf.tool_calls(self.work), [("WebFetch", "https://a.example/x y")])
+
+
+class CitationCheckContextFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = rf.require_server_packages
+        rf.require_server_packages = lambda *names: None
+        self.addCleanup(setattr, rf, "require_server_packages", self.saved)
+        self.fx = rf.CitationCheckContext()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", None)
+        self.c = self.fx.checks_listed
+
+    GOOD = """# Citation check
+
+| Sentence | Verdict | Note |
+|---|---|---|
+| Peak suspended sediment concentration occurred during spring tides | Supported | in the results |
+| Tidal pumping is the main cause of the up-estuary increase in sediment concentration | Overstated | the source says the data suggest it contributes |
+| Concentration increased towards the mouth of the estuary at all three stations | Contradicted | the source says towards the head |
+| The bed sediment of the estuary is mainly fine sand | Not located | the source did not measure bed sediment |
+| River discharge controlled the concentration, and the peak occurred during spring tides | discharge: Contradicted; spring tides: Supported | two components |
+| Wave climate is dominant in the outer estuary (Quill, 2015) | Unable to verify: no source text available | nothing linked |
+
+External verification was not done.
+"""
+
+    def write(self, text):
+        folder = self.root / "outputs" / "citation-check-manuscript-101126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "citation-check-report.md").write_text(text, encoding="utf-8")
+
+    def read_call(self, max_chars=150000):
+        write_transcript(self.home, self.root, [tool_call("mcp__endnote__read_linked_file_text", ref_id=1, max_chars=max_chars)])
+
+    def results(self):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, "", self.fx.before)}
+
+    def test_the_inputs_are_what_the_checks_assume(self):
+        self.assertEqual(self.fx.RECORDS[0]["year"], "2018")
+        text = " ".join(self.fx.SOURCE)
+        for fact in ("Peak concentration occurred during spring tides", "towards the head", "no relationship between concentration and river discharge",
+                     "suggest that tidal pumping contributes", "did not measure bed sediment"):
+            self.assertIn(fact, text)
+        ET.fromstring(zipfile.ZipFile(self.fx.manuscript).read("word/document.xml"))
+        self.assertEqual(len(rf.doc_text(self.fx.manuscript)), 1 + len(self.fx.CLAIMS))
+        self.assertEqual(len(self.fx.checks_listed), 10)
+
+    def test_a_good_report_passes_every_check(self):
+        self.write(self.GOOD)
+        self.read_call()
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_wrong_verdict_fails_its_check(self):
+        self.read_call()
+        cases = [
+            (self.GOOD.replace("| Supported | in the results", "| Contradicted | in the results"), self.c[1]),
+            (self.GOOD.replace("Overstated", "Supported"), self.c[2]),
+            (self.GOOD.replace("| Contradicted | the source says towards the head", "| Supported | the source says towards the head"), self.c[3]),
+            (self.GOOD.replace("Not located", "Contradicted"), self.c[4]),
+            (self.GOOD.replace("discharge: Contradicted; spring tides: Supported", "Contradicted"), self.c[5]),
+            (self.GOOD.replace("Unable to verify: no source text available", "Supported"), self.c[6]),
+        ]
+        for text, check in cases:
+            self.write(text)
+            self.assertFalse(self.results()[check], check)
+
+    def test_a_split_compound_sentence_passes_and_prompt_words_in_the_skill_call_are_not_calls(self):
+        both = "| River discharge controlled the concentration, and the peak occurred during spring tides | discharge: Contradicted; spring tides: Supported | two components |"
+        split = self.GOOD.replace(both, '| 5a "River discharge controlled the concentration ..." | Contradicted | no relationship |\n'
+                                        '| 5b "... and the peak occurred during spring tides" | Supported | stated |')
+        self.assertNotEqual(split, self.GOOD)
+        self.write(split)
+        self.read_call()
+        self.assertTrue(self.results()[self.c[5]], "one row for each half is a verdict for each component")
+        self.write(split.replace("| Supported | stated |", "| Contradicted | stated |"))
+        self.assertFalse(self.results()[self.c[5]], "the second half is not Supported")
+        self.write(split)
+        write_transcript(self.home, self.root, [
+            tool_call("Skill", skill="citation-check", args="make no call to CrossRef, OpenAlex, arXiv, Unpaywall or https://x.example"),
+            tool_call("mcp__endnote__read_linked_file_text", ref_id=1, max_chars=150000)])
+        self.assertTrue(self.results()[self.c[8]], "the Skill call only repeats the prompt")
+        write_transcript(self.home, self.root, [tool_call("Bash", command="curl https://api.crossref.org/works/x")])
+        self.assertFalse(self.results()[self.c[8]])
+
+    def test_a_small_max_chars_an_external_call_and_a_changed_library_are_caught(self):
+        self.write(self.GOOD)
+        self.read_call(max_chars=20000)
+        self.assertFalse(self.results()[self.c[7]])
+        self.read_call()
+        self.assertTrue(self.results()[self.c[7]])
+        write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.crossref.org/works/10.1/x")])
+        self.assertFalse(self.results()[self.c[8]])
+        write_transcript(self.home, self.root, [tool_call("mcp__endnote__read_linked_file_text", ref_id=1, max_chars=150000)])
+        self.assertTrue(self.results()[self.c[8]], "the local EndNote tools are not external calls")
+        (self.fx.library.with_suffix(".Data") / "PDF" / "Marlow2018.pdf").write_bytes(b"changed")
+        self.assertFalse(self.results()[self.c[9]])
+
+
+class CitationCheckExternalFixture(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = rf.require_server_packages
+        rf.require_server_packages = lambda *names: None
+        self.addCleanup(setattr, rf, "require_server_packages", self.saved)
+
+        class Args:
+            external = True
+        self.Args = Args
+        self.fx = rf.CitationCheckExternal()
+        (self.work / "tmp").mkdir()
+        self.root = self.fx.build(self.work / "tmp", Args())
+        self.c = self.fx.checks_listed
+
+    GOOD = """# Citation check
+
+| Reference | Finding |
+|---|---|
+| Watson and Crick 1953 | resolved; verified on CrossRef by DOI: title, authors, year and journal agree |
+| Shannon 1949 | year mismatch: the library says 1949 and CrossRef says 1948 |
+| LeCun et al. 2015, Deep learning | no DOI; verified by a title search on CrossRef (authors LeCun, Bengio and Hinton, year 2015) |
+| Harrington and Osei 2021 | DOI 10.9999/jcr.2021.0099 not found on CrossRef; the title searches gave no author match; not verified |
+"""
+    CALLS = [tool_call("WebFetch", url="https://api.crossref.org/works/10.1038/171737a0"),
+             tool_call("WebFetch", url="https://api.crossref.org/works?query.title=Deep+learning&query.author=LeCun"),
+             tool_call("WebFetch", url="https://api.openalex.org/works?filter=title.search:Deep%20learning"),
+             tool_call("WebFetch", url='https://export.arxiv.org/api/query?search_query=ti:"Deep learning"&max_results=5')]
+
+    def write(self, text):
+        folder = self.root / "outputs" / "citation-check-manuscript-101126-run1"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "citation-check-report.md").write_text(text, encoding="utf-8")
+
+    def calls(self, *extra, drop=()):
+        entries = [c for i, c in enumerate(self.CALLS) if i not in drop] + list(extra)
+        write_transcript(self.home, self.root, entries)
+
+    def results(self):
+        return {n: ok for n, ok, _ in self.fx.check(self.root, "", self.fx.before)}
+
+    def test_it_is_skipped_unless_external_is_given_and_the_inputs_are_what_the_checks_assume(self):
+        class NoExternal:
+            external = False
+        with self.assertRaises(rf.Skip):
+            rf.CitationCheckExternal().build(self.work / "q", NoExternal())
+        self.assertEqual(self.fx.RECORDS[1]["year"], "1949", "the planted wrong year")
+        self.assertEqual(self.fx.RECORDS[3]["electronic_resource_number"][:7], "10.9999", "a prefix that does not exist")
+        ET.fromstring(zipfile.ZipFile(self.fx.manuscript).read("word/document.xml"))
+        self.assertEqual(len(self.fx.checks_listed), 10)
+
+    def test_a_good_result_passes_every_check(self):
+        self.write(self.GOOD)
+        self.calls()
+        results = self.results()
+        self.assertTrue(all(results.values()), [n for n, ok in results.items() if not ok])
+
+    def test_each_planted_problem_fails_its_check(self):
+        self.calls()
+        c = self.c
+        cases = [
+            (self.GOOD.replace("1948", "an earlier year"), c[2]),
+            (self.GOOD + "| Watson and Crick 1953 | title mismatch on CrossRef |\n", c[3]),
+            (self.GOOD.replace("verified by a title search", "not verified by a title search"), c[4]),
+            (self.GOOD.replace("not verified", "verified"), c[5]),
+        ]
+        for text, check in cases:
+            self.write(text)
+            self.assertFalse(self.results()[check], check)
+
+    def test_scripted_queries_count_and_prompt_words_in_the_skill_call_do_not(self):
+        self.write(self.GOOD)
+        quote = chr(92) + '"'
+        script = ('URLS = ["https://api.crossref.org/works/{doi}", "https://api.openalex.org/works?filter=title.search:{t}", '
+                  '"https://export.arxiv.org/api/query?search_query=ti:' + quote + '{t}' + quote + '&max_results=5"]\n'
+                  'DOIS = ["10.1038/171737a0"]')
+        write_transcript(self.home, self.root, [
+            tool_call("Skill", skill="citation-check", args="not Semantic Scholar, Unpaywall, Exa; no mailto= parameter"),
+            tool_call("Write", file_path="q.py", content=script)])
+        results = self.results()
+        for index in (1, 6, 7, 8):
+            self.assertTrue(results[self.c[index]], self.c[index])
+        write_transcript(self.home, self.root, [tool_call("Write", file_path="q.py", content=script + "\nX = 'https://api.unpaywall.org/v2/x'")])
+        self.assertFalse(self.results()[self.c[6]], "a real Unpaywall address in a script")
+
+    def test_a_script_that_keeps_the_base_address_and_the_query_apart_is_judged_on_the_query(self):
+        self.write(self.GOOD)
+        base = 'ARXIV = "https://export.arxiv.org/api/query"\nOA = "https://api.openalex.org/works"\nCR = "https://api.crossref.org/works/"\nDOI = "10.1038/171737a0"\n'
+        good = base + 'q = ARXIV + "?search_query=ti:%22" + t + "%22&max_results=5"\nr = OA + "?filter=title.search:" + t\n'
+        write_transcript(self.home, self.root, [tool_call("Bash", command=good)])
+        results = self.results()
+        for index in (1, 7, 8):
+            self.assertTrue(results[self.c[index]], self.c[index])
+        write_transcript(self.home, self.root, [tool_call("Bash", command=base + 'q = ARXIV + "?search_query=ti:" + t + "&max_results=5"\n')])
+        self.assertFalse(self.results()[self.c[8]], "an unquoted query built apart from the address")
+        write_transcript(self.home, self.root, [tool_call("Bash", command=base + 'r = OA + "?search=" + t\n')])
+        self.assertFalse(self.results()[self.c[7]], "a bare search parameter built apart from the address")
+        write_transcript(self.home, self.root, [tool_call("Bash", command=base)])
+        self.assertFalse(self.results()[self.c[8]], "no arXiv query at all")
+
+    def test_the_lecun_row_may_say_match_on_title_but_not_no_match(self):
+        self.calls()
+        c = self.c
+        match_row = "| LeCun et al. 2015 | no DOI; title search found the same work: match on title, authors, year and journal |"
+        self.write(self.GOOD.replace([ln for ln in self.GOOD.splitlines() if "LeCun" in ln][0], match_row))
+        self.assertTrue(self.results()[c[4]])
+        for wording in ("no match on title in CrossRef", "title search: ambiguous between two works", "not a match"):
+            self.write(self.GOOD.replace([ln for ln in self.GOOD.splitlines() if "LeCun" in ln][0], f"| LeCun et al. 2015 | {wording} |"))
+            self.assertFalse(self.results()[c[4]], wording)
+
+    def test_the_calls_are_checked_for_services_search_form_and_quoting(self):
+        self.write(self.GOOD)
+        c = self.c
+        self.calls(drop=(0,))
+        self.assertFalse(self.results()[c[1]], "no CrossRef DOI call")
+        self.calls(tool_call("WebFetch", url="https://api.semanticscholar.org/graph/v1/paper/search?query=x"))
+        self.assertFalse(self.results()[c[6]])
+        self.calls(tool_call("WebFetch", url="https://api.crossref.org/works/10.1/x?mailto=a@b.c"))
+        self.assertFalse(self.results()[c[6]])
+        self.calls(tool_call("WebFetch", url="https://api.openalex.org/works?search=tidal+inlet"))
+        self.assertFalse(self.results()[c[7]], "the bare search parameter")
+        self.calls(drop=(2,))
+        self.assertFalse(self.results()[c[7]], "no OpenAlex call at all")
+        self.calls(tool_call("WebFetch", url="https://export.arxiv.org/api/query?search_query=ti:Deep learning&max_results=5"))
+        self.assertFalse(self.results()[c[8]], "an unquoted arXiv title")
+        self.calls(drop=(3,))
+        self.assertFalse(self.results()[c[8]], "no arXiv call at all")
+        self.calls(tool_call("WebFetch", url="https://export.arxiv.org/api/query?search_query=ti:%22Deep+learning%22"))
+        self.assertTrue(self.results()[c[8]], "a percent-encoded quote is still a quote")
+        self.fx.library.write_bytes(b"changed")
+        self.assertFalse(self.results()[c[9]])
+
+
 if __name__ == "__main__":
     unittest.main()

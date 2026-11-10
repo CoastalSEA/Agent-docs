@@ -15,7 +15,8 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
                                            [--claude PATH] [--permission-mode MODE] [--out DIR]
                                            [--estuary-doc PATH] [--test-library PATH] [--external]
   skill      project-disclosure, analysis-adversary, proofread, proofread-structure, citation-check,
-             literature-search, literature-search-external (default: all that can run)
+             citation-check-context, citation-check-external, literature-search, literature-search-external
+             (default: all that can run)
   --list     print the fixtures and their checks, and run nothing
   --keep     keep the temporary project and its logs
   --timeout  seconds allowed for each session (default: 900, or 1800 for proofread and citation-check)
@@ -23,13 +24,16 @@ Usage: python tests/skills/run_fixtures.py [skill ...] [--list] [--keep] [--time
              the fixture needs Microsoft Word and is skipped without it
   --test-library PATH  the .enl file of the test EndNote library for the citation-check and literature-search
              fixtures (or set FIXTURE_ENDNOTE_LIBRARY); a fixture is skipped without it
-  --external  also run literature-search-external, which sends a query to OpenAlex (skipped otherwise)
+  --external  also run the two external fixtures: literature-search-external sends a query to OpenAlex, and
+             citation-check-external sends the titles, authors, years and DOIs of four records to CrossRef, OpenAlex
+             and arXiv (both are skipped otherwise)
   --claude   the claude command (default: the one on PATH)
   --permission-mode  the mode for the sessions (default auto, as in interactive use; a headless session
              started in the default mode cannot get approval for run control or Python commands)
   --out      folder for the results (default: working_docs/skill-runs under the repository)
 Inputs:  the live Claude configuration; `claude` on PATH.
-Outputs: <out>/<skill>-<DDMMYY-HHMM>/ with reply.txt, the saved deliverable, checks.json and, for the proofread fixtures,
+Outputs: <out>/<skill>-<DDMMYY-HHMM>/ with reply.txt, the saved deliverable, checks.json, tool-calls.txt (a one-line summary of
+         each tool call, kept because the session transcripts are removed after the run) and, for the proofread fixtures,
          docx-skill-check.txt (whether the docx skill scripts are present and unchanged); a table on standard output.
 Exit:    0 if every check of every fixture that ran passed (a skipped fixture is not a failure); 1 otherwise.
 Version: see VERSION; `--version` prints it.
@@ -51,7 +55,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.3"
+VERSION = "1.4"
 REPO = Path(__file__).resolve().parents[2]
 CLAUDE_HOME = Path.home() / ".claude"
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -826,9 +830,12 @@ class CitationCheck(TestLibrary, Fixture):
         def add(name, ok, detail=""):
             out.append((name, bool(ok), detail))
 
+        negated = re.compile(r"\b(?:no|without|zero|not)\s+(?:\w+\s+){0,2}?(?:drift|mismatch\w*|ambigu\w*|unresolved)\b", re.I)
+
         def lines_with(*needles, any_of=()):
+            # "no drift" and "no mismatch" say that the record is fine, so they are removed before the problem words are sought
             return [ln for ln in lines if all(n.lower() in ln.lower() for n in needles)
-                    and (not any_of or any(a.lower() in ln.lower() for a in any_of))]
+                    and (not any_of or any(a.lower() in negated.sub("", ln).lower() for a in any_of))]
 
         add(self.checks_listed[0], text is not None)
         add(self.checks_listed[1], lines_with("Adaptive Planning", any_of=("unresolved", "not found", "no match", "no reasonable"))
@@ -847,6 +854,318 @@ class CitationCheck(TestLibrary, Fixture):
         add(self.checks_listed[5], not external, f"{len(external)} tool calls to external services")
         add(self.checks_listed[6], re.search(r"not (verified|checked|done|run)|declined|no external", t, re.I) is not None)
         add(self.checks_listed[7], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
+        return out
+
+
+def require_server_packages(*names):
+    """Skip a fixture whose generated library is served by the EndNote server when the server's packages are missing."""
+    missing = [n for n in names if importlib.util.find_spec(n) is None]
+    if missing:
+        raise Skip(f"the EndNote server's packages are not importable here: {', '.join(missing)}")
+
+
+def make_pdf(path, lines, font_size=9):
+    """A minimal one-page PDF whose text is the given lines (ASCII only), readable by pypdf."""
+    def esc(s):
+        return s.replace(chr(92), chr(92) * 2).replace("(", chr(92) + "(").replace(")", chr(92) + ")")
+    content = f"BT /F1 {font_size} Tf {font_size + 4} TL 60 740 Td\n" + "".join(f"({esc(ln)}) Tj T*\n" for ln in lines) + "ET"
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>",
+               "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+               f"<< /Length {len(content)} >>\nstream\n{content}\nendstream",
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{obj}\nendobj\n".encode("ascii")
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
+    out += "".join(f"{o:010d} 00000 n \n" for o in offsets).encode("ascii")
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+    Path(path).write_bytes(out)
+
+
+class SyntheticLibrary(TestLibrary):
+    """A generated EndNote library (the two tables the read-only server uses) so that a fixture never touches a real one."""
+    COLUMNS = ("author", "year", "title", "secondary_title", "volume", "number", "pages", "publisher", "abstract", "keywords",
+               "url", "notes", "isbn", "electronic_resource_number")
+
+    def make_library(self, tmp, records, pdfs=None):
+        """records: [dict with the COLUMNS keys that are needed]; ids run from 1. pdfs: {record id: (file name, lines)}."""
+        import sqlite3
+        base = Path(tmp) / "Library"
+        base.mkdir()
+        lib = base / "Synthetic.enl"
+        data = base / "Synthetic.Data"
+        data.mkdir()
+        con = sqlite3.connect(lib)  # the .enl file is itself the SQLite database that the server opens
+        cols = ", ".join(f"{c} TEXT NOT NULL DEFAULT ''" for c in self.COLUMNS)
+        con.execute("CREATE TABLE refs (id INTEGER PRIMARY KEY AUTOINCREMENT, trash_state INTEGER NOT NULL DEFAULT 0, "
+                    f"reference_type INTEGER NOT NULL DEFAULT 17, {cols})")
+        con.execute("CREATE TABLE file_res (refs_id INTEGER NOT NULL, file_path TEXT NOT NULL DEFAULT '', "
+                    "file_type INTEGER NOT NULL, file_pos INTEGER NOT NULL)")
+        for rec in records:
+            names = [c for c in self.COLUMNS if c in rec]
+            con.execute(f"INSERT INTO refs ({', '.join(names)}) VALUES ({', '.join('?' for _ in names)})",
+                        [rec[c] for c in names])
+        for ref_id, (name, lines) in (pdfs or {}).items():
+            (data / "PDF").mkdir(exist_ok=True)
+            make_pdf(data / "PDF" / name, lines)
+            con.execute("INSERT INTO file_res (refs_id, file_path, file_type, file_pos) VALUES (?, ?, 0, 0)", (ref_id, name))
+        con.commit()
+        con.close()
+        self.library = lib.resolve()
+        self.write_mcp_config(tmp)
+        return self.library
+
+
+def flatten_strings(value):
+    """Every string inside a nested value, joined by spaces."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(flatten_strings(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return " ".join(flatten_strings(v) for v in value)
+    return str(value)
+
+
+def tool_calls(root):
+    """[(tool name, all the strings of its input)] for every tool call in the session transcripts of root."""
+    import glob
+    found = []
+    for f in glob.glob(str(CLAUDE_HOME / "projects" / project_key(root) / "**" / "*.jsonl"), recursive=True):
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"tool_use"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                content = (entry.get("message") or {}).get("content")
+                for item in content if isinstance(content, list) else []:
+                    if isinstance(item, dict) and item.get("type") == "tool_use":
+                        found.append((item.get("name", ""), flatten_strings(item.get("input"))))
+    return found
+
+
+def short_author(record):
+    """'Marlow and Okoro', 'Quill', or 'LeCun et al.' from an author string with authors separated by a carriage return."""
+    if record.get("display"):
+        return record["display"]
+    surnames = [a.split(",")[0].strip() for a in record["author"].split(chr(13))]
+    return surnames[0] if len(surnames) == 1 else " and ".join(surnames) if len(surnames) == 2 else surnames[0] + " et al."
+
+
+def own_calls(calls):
+    """The tool calls that do work. The Skill and Agent calls carry the user's prompt text as their arguments, so words in
+    them (for example the names of the services the prompt forbids) are not evidence of anything."""
+    return [(n, s) for n, s in calls if n not in ("Skill", "Agent", "Task")]
+
+
+def cite_paragraph(lead, record, recnum, tail="."):
+    """A paragraph: lead text, one CWYW field for the record (a dict with author, year, title), then the tail."""
+    display = f"({short_author(record)}, {record['year']})"
+    author = record["author"].replace(chr(13), " and ")
+    return w_para(lead, CitationCheck._field(author, record["year"], record["title"], recnum, display), tail)
+
+
+def verdict_line(lines, needle, verdict, exclude=None):
+    """Is there a line (a table row or a list item) that names the needle and carries the verdict?"""
+    return any(re.search(needle, ln, re.I) and re.search(verdict, ln, re.I) and not (exclude and re.search(exclude, ln, re.I))
+               for ln in lines)
+
+
+NOT_SUPPORTED = r"(?<!not )(?<!un)supported"
+
+
+# ---------------------------------------------------------------------------------------------------------
+class CitationCheckContext(SyntheticLibrary, Fixture):
+    """Stage 2 (--context) against a generated library whose first record has a linked PDF of known text."""
+    name = "citation-check-context"
+    timeout = 1800
+    max_turns = 80
+    SOURCE = ["Sediment transport in the Lower Brook estuary",
+              "Marlow T and Okoro E, 2018, Journal of Estuary Studies",
+              "Abstract. We measured suspended sediment concentration at three stations in the Lower Brook estuary",
+              "over one spring-neap cycle. Mean concentration was 120 mg per litre at the mouth and 340 mg per litre at the head.",
+              "Results. Concentration increased towards the head of the estuary at all three stations.",
+              "Peak concentration occurred during spring tides.",
+              "We found no relationship between concentration and river discharge during the survey.",
+              "Discussion. The data suggest that tidal pumping contributes to the up-estuary increase, although the survey",
+              "was too short to separate it from other processes. We did not measure bed sediment composition."]
+    RECORDS = [
+        {"author": "Marlow, T\rOkoro, E", "year": "2018", "title": "Sediment transport in the Lower Brook estuary",
+         "secondary_title": "Journal of Estuary Studies"},
+        {"author": "Quill, R", "year": "2015", "title": "Wave climate of the outer estuary", "secondary_title": "Coastal Notes"},
+    ]
+    CLAIMS = [  # (sentence, record index, planted verdict)
+        ("Peak suspended sediment concentration occurred during spring tides", 0, "Supported"),
+        ("Tidal pumping is the main cause of the up-estuary increase in sediment concentration", 0, "Overstated"),
+        ("Concentration increased towards the mouth of the estuary at all three stations", 0, "Contradicted"),
+        ("The bed sediment of the estuary is mainly fine sand", 0, "Not located"),
+        ("River discharge controlled the concentration, and the peak occurred during spring tides", 0, "Contradicted and Supported"),
+        ("Wave climate is dominant in the outer estuary", 1, "Unable to verify"),
+    ]
+    checks_listed = (
+        "a report citation-check-report.md is saved in an output folder of the task",
+        "'Peak ... during spring tides' is Supported",
+        "'Tidal pumping is the main cause' is Overstated",
+        "'Concentration increased towards the mouth' is Contradicted",
+        "'The bed sediment ... fine sand' is Not located",
+        "the compound sentence on river discharge and spring tides gets a verdict for each component",
+        "the citation with no linked file (Quill 2015) is Unable to verify",
+        "read_linked_file_text was called with max_chars of 100,000 or more",
+        "no external call was made",
+        "the manuscript, the library, its PDF and the project files are unchanged",
+    )
+
+    def build(self, tmp, args=None):
+        require_server_packages("pypdf", "mcp")  # the server reads the linked PDF with pypdf
+        self.make_library(tmp, self.RECORDS, pdfs={1: ("Marlow2018.pdf", self.SOURCE)})
+        root = (Path(tmp) / "Paper").resolve()
+        root.mkdir()
+        self.manuscript = root / "manuscript.docx"
+        write_minimal_docx(self.manuscript, [w_para("Results")] + [
+            cite_paragraph(sentence + " ", self.RECORDS[i], i + 1) for sentence, i, _ in self.CLAIMS])
+        self.root = root
+        self.before = tree_hashes(root)
+        self.lib_before = self._library_hashes()
+        return root
+
+    def prompt(self, root):
+        return ("Use the citation-check skill on 'manuscript.docx' in this folder, with context (--context). Scope: the whole "
+                "document. Where the skill asks for confirmation before external verification, the answer is no: make no "
+                "external call of any kind (no CrossRef, OpenAlex, arXiv, Semantic Scholar, Unpaywall or web request) and report "
+                "the external checks as not done. Do not ask me questions. When the skill has finished, tell me the path of the "
+                "report and whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        text = self.result_text(root, "citation-check-report.md")
+        lines = (text or "").splitlines()
+        c = self.checks_listed
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(c[0], text is not None)
+        add(c[1], verdict_line(lines, r"spring tides", NOT_SUPPORTED, exclude=r"discharge") or
+            bool(re.search(r"supported\W*[:=|]?\W*[1-9]|[1-9]\W*supported", text or "", re.I)))
+        add(c[2], verdict_line(lines, r"tidal pumping", r"overstated"))
+        add(c[3], verdict_line(lines, r"towards the mouth|toward the mouth|the mouth of", r"contradict"))
+        add(c[4], verdict_line(lines, r"bed sediment|fine sand", r"not located"))
+        discharge = [ln for ln in lines if re.search(r"discharge", ln, re.I)]
+        second_half = [ln for ln in lines if re.search(r"and the peak occurred during spring tides", ln, re.I)]
+        add(c[5], verdict_line(discharge, r"discharge", r"contradict")
+            and (verdict_line(discharge, r"discharge", NOT_SUPPORTED) or verdict_line(second_half, r"spring tides", NOT_SUPPORTED)),
+            "needs a Contradicted verdict for the discharge component and a Supported one for the spring-tides component, "
+            "on one row or on separate rows that quote each half of the sentence")
+        add(c[6], verdict_line(lines, r"quill|wave climate", r"unable to verify"))
+        calls = tool_calls(root)
+        sizes = [int(m) for name, s in calls if "read_linked_file_text" in name for m in re.findall(r"\b(\d{4,9})\b", s)]
+        add(c[7], any(n >= 100000 for n in sizes), f"values seen: {sizes}")
+        external = [(name, s[:100]) for name, s in own_calls(calls)
+                    if name in ("WebFetch", "WebSearch") or name.startswith(("mcp__exa__", "mcp__claude_ai_Consensus"))
+                    or (name in ("Bash", "PowerShell") and re.search(r"https?://|crossref|openalex|arxiv|semanticscholar|unpaywall", s, re.I))]
+        add(c[8], not external, f"{len(external)} calls: {external[:2]}")
+        add(c[9], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
+        return out
+
+
+# ---------------------------------------------------------------------------------------------------------
+class CitationCheckExternal(SyntheticLibrary, Fixture):
+    """Stage 1 with external verification confirmed for CrossRef, OpenAlex and arXiv only (run with --external)."""
+    name = "citation-check-external"
+    timeout = 2400
+    max_turns = 80
+    RECORDS = [
+        {"author": "Watson, J. D.\rCrick, F. H. C.", "year": "1953",
+         "title": "Molecular Structure of Nucleic Acids: A Structure for Deoxyribose Nucleic Acid",
+         "secondary_title": "Nature", "volume": "171", "electronic_resource_number": "10.1038/171737a0"},
+        {"author": "Shannon, C. E.", "year": "1949", "title": "A Mathematical Theory of Communication",
+         "secondary_title": "Bell System Technical Journal", "electronic_resource_number": "10.1002/j.1538-7305.1948.tb01338.x"},
+        {"author": "LeCun, Y.\rBengio, Y.\rHinton, G.", "year": "2015", "title": "Deep learning", "secondary_title": "Nature",
+         "volume": "521", "display": "LeCun et al."},
+        {"author": "Harrington, A.\rOsei, K.", "year": "2021", "title": "Adaptive Planning Horizons for Estuarine Flood Defences",
+         "secondary_title": "Journal of Coastal Research", "volume": "37", "electronic_resource_number": "10.9999/jcr.2021.0099"},
+    ]
+    LEADS = ["The structure of DNA was first described ", "The theory of information is set out ",
+             "Neural networks are reviewed ", "Flood defences need adaptive planning "]
+    checks_listed = (
+        "a report citation-check-report.md is saved in an output folder of the task",
+        "CrossRef was queried by DOI for Watson and Crick (10.1038/171737a0)",
+        "the year in the library for Shannon (1949) against CrossRef (1948) is reported",
+        "Watson and Crick (correct record and DOI) is not reported as a problem",
+        "LeCun et al. (no DOI) was found by a title search and is reported verified",
+        "Harrington and Osei (invented, with a non-existent DOI prefix) is not reported as verified",
+        "only CrossRef, OpenAlex and arXiv were used: no Semantic Scholar, Exa, Consensus or mailto",
+        "every OpenAlex title search uses filter=title.search, never the bare search parameter",
+        "arXiv was queried with the title double-quoted",
+        "the manuscript, the library and the project files are unchanged",
+    )
+
+    def build(self, tmp, args=None):
+        if not getattr(args, "external", False):
+            raise Skip("sends bibliographic metadata to CrossRef, OpenAlex and arXiv; give --external to run it")
+        require_server_packages("mcp")
+        self.make_library(tmp, self.RECORDS)
+        root = (Path(tmp) / "Paper").resolve()
+        root.mkdir()
+        self.manuscript = root / "manuscript.docx"
+        write_minimal_docx(self.manuscript, [w_para("Background")] + [
+            cite_paragraph(lead, self.RECORDS[i], i + 1) for i, lead in enumerate(self.LEADS)])
+        self.root = root
+        self.before = tree_hashes(root)
+        self.lib_before = self._library_hashes()
+        return root
+
+    def prompt(self, root):
+        return ("Use the citation-check skill on 'manuscript.docx' in this folder. Scope: the whole document. Stage 1 only. "
+                "Where the skill asks for confirmation before external verification, the answer is yes, for CrossRef, OpenAlex "
+                "and arXiv only: you may send the titles, authors, years and DOIs of the four cited records to those three "
+                "services and to no other service (not Semantic Scholar, Exa, Consensus or Unpaywall), and you must not add a "
+                "mailto parameter or any other personal identifier. Do not ask me again. When the skill has finished, tell me the "
+                "path of the report and whether the run is pending review.")
+
+    def check(self, root, reply, before):
+        text = self.result_text(root, "citation-check-report.md")
+        lines = (text or "").splitlines()
+        calls = own_calls(tool_calls(root))
+        joined = " ".join(s for _, s in calls)
+        c = self.checks_listed
+        out = []
+
+        def add(name, ok, detail=""):
+            out.append((name, bool(ok), detail))
+
+        add(c[0], text is not None)
+        # a session may script its queries, so the DOI and the CrossRef address can sit in one script as data and a template
+        add(c[1], re.search(r"api\.crossref\.org/works", joined, re.I) is not None
+            and re.search(r"10\.1038(?:/|%2F)171737a0", joined, re.I) is not None, "needs a CrossRef works call and the DOI")
+        add(c[2], any(re.search("shannon", ln, re.I) and "1948" in ln and "1949" in ln for ln in lines))
+        problem = r"mismatch|not verified|unresolved|not found|differ|wrong|discrepan"
+        add(c[3], not verdict_line(lines, r"watson|crick|nucleic", problem), "a line about this record names a problem")
+        title_search = re.search(r"title\.search|query\.title|query\.bibliographic|[?&]query=|ti:", joined, re.I) is not None
+        positive = r"(?<!not )(?<!un)verified|(?<!no )(?<!not a )match(?:ed|es)? on|same work|confirmed"
+        add(c[4], title_search and verdict_line(lines, r"lecun|deep learning", positive, exclude=r"not verified|unverified|ambiguous|unresolved"),
+            f"title search seen: {title_search}")
+        add(c[5], verdict_line(lines, r"harrington|adaptive planning", r"not verified|not found|no match|not indexed|could not|unverified|no result")
+            and not verdict_line(lines, r"harrington|adaptive planning", r"(?<!not )(?<!un)verified", exclude=r"not verified|unverified|not been verified"))
+        banned = re.search(r"semanticscholar\.org|unpaywall\.org|mailto=|mcp__exa__|Consensus__", " ".join(n + " " + s for n, s in calls), re.I)
+        add(c[6], banned is None, f"found: {banned.group(0) if banned else ''}")
+        openalex_used = re.search(r"openalex\.org", joined, re.I) is not None
+        bare = re.search(r"[?&]search=", joined) is not None
+        add(c[7], openalex_used and not bare, f"OpenAlex used: {openalex_used}; bare search parameter present: {bare}")
+        arxiv_used = re.search(r"arxiv\.org", joined, re.I) is not None
+        queries = re.findall(r"search_query=[^\s<>]*", joined)
+        # a title quote is %22, or a quote that is followed by the title; in script text a quote followed by a space, +, ) , ;
+        # is only the end of a string literal
+        quote = r"search_query=(?:ti|all)(?::|%3A)(?:%22|" + chr(92) * 2 + r"?\"(?![\s+),;\]]|$))"
+        unquoted = [q for q in queries if not re.match(quote, q, re.I)]
+        add(c[8], arxiv_used and bool(queries) and not unquoted, f"arXiv used: {arxiv_used}; {len(queries)} queries, unquoted: {unquoted[:2]}")
+        add(c[9], tree_hashes(root) == before and self._library_hashes() == self.lib_before)
         return out
 
 
@@ -995,7 +1314,7 @@ class LiteratureSearchExternal(TestLibrary, Fixture):
         return out
 
 
-FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(),
+FIXTURES = {f.name: f for f in (ProjectDisclosure(), AnalysisAdversary(), Proofread(), ProofreadStructure(), CitationCheck(), CitationCheckContext(), CitationCheckExternal(),
                                       LiteratureSearch(), LiteratureSearchExternal())}
 
 
@@ -1042,6 +1361,10 @@ def run_one(fixture, args, out_dir):
     seconds = round(time.time() - started)
     (dest / "reply.txt").write_text(reply, encoding="utf-8")
     results = fixture.check(root, reply, fixture.before)
+    calls = tool_calls(root)
+    urls = sorted({u for _, s in calls for u in re.findall(r"https?://[^\s\"'<>)\]]+", s)})
+    (dest / "tool-calls.txt").write_text("\n".join(f"{n}: {s[:240]}" for n, s in calls)
+                                         + "\n\nURLs seen in the calls:\n" + "\n".join(urls[:80]) + "\n", encoding="utf-8")
     if (root / "outputs").is_dir():
         shutil.copytree(root / "outputs", dest / "outputs", dirs_exist_ok=True)
     (dest / "checks.json").write_text(json.dumps(
