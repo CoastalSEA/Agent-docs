@@ -1,14 +1,18 @@
 r"""Claude Code PreToolUse hook: block writes to protected files.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: data/ is guarded in a framework project only;
+                the PowerShell tool is checked as Bash is; touch is a writer; a word after `<`, a comment and a/../b
+                are read correctly)
 
-Protected: the project `data/` folder (input data), except `data/DATA-NOTES.md` and README files, and
-every path listed in `<claude folder>/rules/protected-paths.txt` (one absolute path per line, a file
+Protected: the project `data/` folder (input data), except `data/DATA-NOTES.md` and README files, in a
+framework project only (the `CLAUDE.md` in the session folder names `machine.md`, as every project template
+does; any other folder may write to its own `data/`). Protected in every folder: every path listed in `<claude folder>/rules/protected-paths.txt` (one absolute path per line, a file
 or a folder, `#` starts a comment; for example the EndNote library and its .Data folder).
 
 The hook checks two kinds of call:
 - Write, Edit, MultiEdit and NotebookEdit: the target path.
-- Bash: each command segment (split at ; & | and line ends; a `cd` moves the folder that relative paths are read against) that names a protected path and either
+- Bash and PowerShell: each command segment (split at ; & | and line ends; a `cd` moves the folder that relative paths are read against) that names a protected path and either
   redirects into it with > or >>, or uses a writing command (rm, mv, sed -i, tee, del, truncate,
   Remove-Item, Move-Item, Set-Content, Add-Content, Out-File, Clear-Content, New-Item), or copies
   onto it (cp, Copy-Item with the protected path as the last word).
@@ -32,9 +36,10 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
+GUARD_DATA = True  # set in main: False when the session folder is not a framework project
 FILE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
-WRITERS = re.compile(r"(^|\s)(rm|mv|tee|del|erase|truncate|remove-item|move-item|set-content|add-content|"
+WRITERS = re.compile(r"(^|\s)(rm|mv|tee|touch|del|erase|truncate|remove-item|move-item|set-content|add-content|"
                      r"out-file|clear-content|new-item|rd|rmdir)(\s|$)|(^|\s)sed\s+(-\S*i|--in-place)", re.I)
 COPIERS = re.compile(r"(^|\s)(cp|copy|copy-item|xcopy)(\s|$)", re.I)
 SEGMENTS = re.compile(r"[;&|\n]+")
@@ -54,6 +59,12 @@ def config_paths():
     return [norm(ln).rstrip("/") for ln in lines if ln and not ln.startswith("#")]
 
 
+def framework_project(root):
+    """True if the CLAUDE.md in the folder names machine.md, as every project template does."""
+    f = Path(root) / "CLAUDE.md"
+    return f.is_file() and "machine.md" in f.read_text(encoding="utf-8", errors="replace")
+
+
 def inside(path, base):
     return path == base or path.startswith(base + "/")
 
@@ -65,9 +76,9 @@ def exempt(path, data):
 
 
 def protected_file(path, root, listed):
-    path = norm(str(path))
+    path = posixpath.normpath(norm(str(path)))  # a/../b is read as b
     data = norm(str(root)).rstrip("/") + "/data"
-    if inside(path, data) and not exempt(path, data):
+    if GUARD_DATA and inside(path, data) and not exempt(path, data):
         return "input data (data/)"
     for p in listed:
         if inside(path, p):
@@ -117,7 +128,12 @@ def bash_problem(command, root, listed):
         if words and words[0] == "cd":
             base = after_cd(words, base, root)
             continue
-        hits = [(w, protected_word(w.lstrip(">"), root, listed, base)) for w in words]
+        if not re.search(r"[\"']", seg):  # a comment ends the segment (not judged where quotes are used)
+            words = re.sub(r"(^|\s)#.*$", "", seg).split()
+        # a word that follows `<` is read from, not written to
+        reads = {i for i, w in enumerate(words) if (w.startswith("<") and not w.startswith("<<"))
+                 or (i and words[i - 1] == "<")}
+        hits = [(w, protected_word(w.lstrip(">"), root, listed, base)) for i, w in enumerate(words) if i not in reads]
         hits = [(w, why) for w, why in hits if why]
         if not hits:
             continue
@@ -141,12 +157,14 @@ def main():
         call = json.load(sys.stdin)
         tool, args = call.get("tool_name"), call.get("tool_input", {})
         root = Path(call.get("cwd") or ".")
+        global GUARD_DATA
+        GUARD_DATA = framework_project(root)
         listed = config_paths()
         why = None
         if tool in FILE_TOOLS and args.get(FILE_TOOLS[tool]):
             target = Path(args[FILE_TOOLS[tool]])
             why = protected_file(target if target.is_absolute() else root / target, root, listed)
-        elif tool == "Bash":
+        elif tool in ("Bash", "PowerShell"):
             why = bash_problem(args.get("command", ""), root, listed)
         if not why:
             return 0

@@ -122,24 +122,24 @@ Reports which project template level a project is at (minimal, handoff or full),
 
 A Claude Code `PreToolUse` hook. It stops `git push` while the handoff is stale, so the handoff goes with the work. It is not run by hand.
 
-- It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push`, also with a path before `git` or as `git.exe` (words inside quotes or a here-document are ignored, except after `-c` or `eval`), and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
+- It reads the tool call as JSON on standard input. It acts only on Bash and PowerShell commands that contain `git push`, also with a path before `git` or as `git.exe` (words inside quotes or a here-document are ignored, except after `-c` or `eval`), and only in a framework project (its `CLAUDE.md` names `machine.md`) with a `records/` folder. It runs `wrapup_status.py` there.
 - If the handoff is stale or missing, it exits with code 2 and a message. Claude then writes a checkpoint and pushes again. In every other case, and on any error, it exits 0 and the call goes ahead. Commits are not checked.
-- Install it with `python deploy.py hooks` from the repository root (it installs all three hooks). That adds one entry for each to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hooks to load.
+- Install it with `python deploy.py hooks` from the repository root (it installs all three hooks, for the Bash and PowerShell tools; run it again after an update, and it brings an older entry up to date). That adds one entry for each to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hooks to load.
 - Test it by hand: `echo '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"<project root>"}' | <python> hook_push_check.py; echo $?`
 
 ## hook_guard.py
 
 A `PreToolUse` hook that blocks writes to protected files with exit code 2 and a message.
 
-- Protected: the project `data/` folder, except `data/DATA-NOTES.md` and README files; and every path in `~/.claude/rules/protected-paths.txt` (one absolute path per line, a file or a folder, `#` for comments; for example the EndNote library file and its `.Data` folder).
-- It checks the target of Write, Edit, MultiEdit and NotebookEdit, and each Bash command segment that names a protected path and redirects into it (`>`, `>>`), uses a writing command (`rm`, `mv`, `sed -i`, `tee`, `del`, `Remove-Item`, `Set-Content`, `Out-File` and similar) or copies onto it. Reading and copying out of a protected folder are allowed.
+- Protected: the project `data/` folder, except `data/DATA-NOTES.md` and README files, in a framework project only (the `CLAUDE.md` in the session folder names `machine.md`, as every project template does); and, in every folder, every path in `~/.claude/rules/protected-paths.txt` (one absolute path per line, a file or a folder, `#` for comments; for example the EndNote library file and its `.Data` folder).
+- It checks the target of Write, Edit, MultiEdit and NotebookEdit, and each Bash or PowerShell command segment that names a protected path and redirects into it (`>`, `>>`), uses a writing command (`rm`, `mv`, `sed -i`, `tee`, `del`, `Remove-Item`, `Set-Content`, `Out-File` and similar) or copies onto it. Reading and copying out of a protected folder are allowed.
 - A `cd` earlier in the command moves the folder that relative paths are read against; a `cd` to a variable makes later relative paths unknown, and they are allowed. Text in a here-document is not read as commands.
 - It cannot see a script that writes to a protected path itself. The data check in `run_control.py` reports that afterwards. The hook guards against slips; it is not a lock.
 - Off switch: set the environment variable `CLAUDE_HOOK_GUARD=off` for a session, or delete its entry in `settings.json`. An error in the hook allows the call.
 
 ## hook_confirm.py
 
-A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs a step that only the user decides. These steps commit, tag, delete or restore output folders, so a permission prompt is shown even where Bash commands are otherwise allowed. It acts on a Bash call only, and any other call, and any error, is allowed without comment.
+A `PreToolUse` hook that makes Claude Code ask the user before a Bash or PowerShell command runs a step that only the user decides. These steps commit, tag, delete or restore output folders, so a permission prompt is shown even where Bash commands are otherwise allowed. It acts on a call of the Bash or PowerShell tool only, and any other call, and any error, is allowed without comment.
 
 The `ASK` list in the script holds the steps that prompt:
 

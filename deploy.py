@@ -435,9 +435,9 @@ def init(target, yes):
 
 # (script, event, matcher, arguments) for each hook that `hooks` installs.
 HOOKS = [
-    ("hook_push_check.py", "PreToolUse", "Bash", ""),
-    ("hook_guard.py", "PreToolUse", "Bash|Write|Edit|MultiEdit|NotebookEdit", ""),
-    ("hook_confirm.py", "PreToolUse", "Bash", ""),
+    ("hook_push_check.py", "PreToolUse", "Bash|PowerShell", ""),
+    ("hook_guard.py", "PreToolUse", "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", ""),
+    ("hook_confirm.py", "PreToolUse", "Bash|PowerShell", ""),
 ]
 # installed only with `hooks --retention-notice`
 OPTIONAL_HOOKS = [
@@ -499,11 +499,15 @@ def hooks(target, yes, optional=False):
         groups = cfg.setdefault("hooks", {}).setdefault(event, [])
         command = hook_command(target, script, args)
         entries = [h for g in groups for h in g.get("hooks", []) if script in h.get("command", "")]
-        if entries and all(h["command"] == command for h in entries):
+        # a group that holds only this hook also gets the present matcher (an earlier version wrote a shorter one)
+        own = [g for g in groups if g.get("hooks") and all(script in h.get("command", "") for h in g["hooks"])]
+        if entries and all(h["command"] == command for h in entries) and all(g.get("matcher") == matcher for g in own):
             continue
         if entries:
             for h in entries:
                 h["command"] = command
+            for g in own:
+                g["matcher"] = matcher
         else:
             groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
         changes.append((script, f"{event}, matcher {matcher}", command))

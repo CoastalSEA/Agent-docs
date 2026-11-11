@@ -2,9 +2,11 @@ r"""Claude Code PreToolUse hook: stop a `git push` while the handoff is stale.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
 Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: git named with a path or as git.exe)
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.2: acts in a framework project only;
+                the PowerShell tool is checked as Bash is)
 
-The hook receives the tool call as JSON on standard input. It acts only on Bash commands that contain
-`git push` (also with a path before `git`, or `git.exe`; not inside quoted text or a here-document, except after `-c` or `eval`) and only in a project that has a `records/` folder. It runs wrapup_status.py for that
+The hook receives the tool call as JSON on standard input. It acts only on Bash and PowerShell commands that contain
+`git push` (also with a path before `git`, or `git.exe`; not inside quoted text or a here-document, except after `-c` or `eval`) and only in a framework project (its `CLAUDE.md` names `machine.md`) that has a `records/` folder. It runs wrapup_status.py for that
 project. If the handoff is stale or missing, the hook exits with code 2 and a message, which blocks the
 push and tells Claude to write a checkpoint first. Any other case, and any error, lets the call go
 ahead: the hook never blocks because of its own fault.
@@ -21,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 PUSH = re.compile(r"(^|[;&|(\s\"'])([^\s\"';&|()]*[\\/])?git(\.exe)?(\s+-\S+(\s+\S+)?)*\s+push([\s\"';&|)]|$)", re.I)
 # a quoted program path that ends in git or git.exe, as in "C:/Program Files/Git/bin/git.exe" push
 QUOTED_GIT = re.compile(r"(\"[^\"\n]*[\\/]git(\.exe)?\"|'[^'\n]*[\\/]git(\.exe)?')", re.I)
@@ -44,11 +46,13 @@ def main():
     try:
         call = json.load(sys.stdin)
         command = call.get("tool_input", {}).get("command", "")
-        if call.get("tool_name") != "Bash" or not PUSH.search(inert_removed(command)):
+        if call.get("tool_name") not in ("Bash", "PowerShell") or not PUSH.search(inert_removed(command)):
             return 0
         root = Path(call.get("cwd") or ".")
-        if not (root / "records").is_dir():
-            return 0
+        rules = root / "CLAUDE.md"
+        if not (root / "records").is_dir() or not rules.is_file() \
+                or "machine.md" not in rules.read_text(encoding="utf-8", errors="replace"):
+            return 0  # not a framework project with records
         status = Path(__file__).with_name("wrapup_status.py")
         r = subprocess.run([sys.executable, str(status), "--root", str(root)],
                            capture_output=True, text=True, timeout=20)

@@ -49,6 +49,8 @@ CONFIRM = find("hook_confirm.py", "scripts")
 PROJECT = find("project.py", "scripts")
 NL = chr(10)
 CRLF = chr(13) + chr(10)
+# A project CLAUDE.md that names machine.md: the mark of a framework project, which the hooks look for.
+PROJECT_RULES = "# CLAUDE.md\n\nUse global settings, `machine.md` and `profile.md`.\n"
 
 GIT_ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -720,6 +722,7 @@ class HookPushCheck(Project):
     def setUp(self):
         super().setUp()
         (self.root / "records").mkdir()
+        (self.root / "CLAUDE.md").write_text(PROJECT_RULES, encoding="utf-8")
         self.work = self.root / "work.txt"
         self.work.write_text("one", encoding="utf-8")
         git(self.root, "add", "-A")
@@ -733,6 +736,16 @@ class HookPushCheck(Project):
         self.work.write_text("two", encoding="utf-8")
         os.utime(self.work, (now - work_age, now - work_age))
         os.utime(self.handoff, (now - handoff_age, now - handoff_age))
+
+    def test_a_folder_that_is_not_a_framework_project_is_not_checked(self):
+        self.times(work_age=10, handoff_age=100)
+        self.assertEqual(self.hook("git push").returncode, 2)
+        for text in (None, "# CLAUDE.md\n\nRules of another kind. Data is in `data/`.\n"):
+            if text is None:
+                (self.root / "CLAUDE.md").unlink()
+            else:
+                (self.root / "CLAUDE.md").write_text(text, encoding="utf-8")
+            self.assertEqual(self.hook("git push").returncode, 0, text)
 
     def hook(self, command, tool="Bash", cwd=None):
         call = json.dumps({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(cwd or self.root)})
@@ -780,6 +793,41 @@ class HookPushCheck(Project):
 
 class HookGuard(Project):
     """hook_guard.py blocks writes to data/ and to listed paths, and nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "CLAUDE.md").write_text(PROJECT_RULES, encoding="utf-8")
+
+    def test_data_is_guarded_only_in_a_framework_project(self):
+        target = str(self.root / "data" / "a.csv")
+        self.assertTrue(self.blocked("Write", file_path=target))
+        self.assertTrue(self.blocked("Bash", command="rm data/a.csv"))
+        for text in (None, "# CLAUDE.md\n\nRules of another kind. Data is in `data/`.\n"):
+            if text is None:
+                (self.root / "CLAUDE.md").unlink()
+            else:
+                (self.root / "CLAUDE.md").write_text(text, encoding="utf-8")
+            self.assertFalse(self.blocked("Write", file_path=target), text)
+            self.assertFalse(self.blocked("Bash", command="rm data/a.csv"), text)
+            self.assertFalse(self.blocked("Bash", command="npm run build > data/build.log"), text)
+
+    def test_listed_paths_are_protected_outside_a_framework_project(self):
+        (self.root / "CLAUDE.md").unlink()
+        scripts = Path(self.tmp.name) / "claude" / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy(GUARD, scripts / "hook_guard.py")
+        (scripts.parent / "rules").mkdir()
+        lib = Path(self.tmp.name) / "lib" / "My.enl"
+        (scripts.parent / "rules" / "protected-paths.txt").write_text(lib.parent.as_posix() + chr(10), encoding="utf-8")
+        call = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(lib)}, "cwd": str(self.root)})
+        r = subprocess.run([sys.executable, "-I", str(scripts / "hook_guard.py")], input=call,
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 2)
+
+    def test_every_project_template_is_a_framework_project(self):
+        for name in ("project-template-minimal", "project-template-handoff", "project-template"):
+            shutil.copy(REPO / "claude-md" / name / "CLAUDE.md", self.root / "CLAUDE.md")
+            self.assertTrue(self.blocked("Write", file_path=str(self.root / "data" / "a.csv")), name)
 
     def hook(self, tool, cwd=None, **args):
         call = json.dumps({"tool_name": tool, "tool_input": args, "cwd": str(cwd or self.root)})
@@ -1588,6 +1636,63 @@ class DeploySettingsFile(DeployHooks):
             self.assertNotIn("Traceback", r.stderr, command)
             self.assertIn("settings.json", r.stdout + r.stderr, command)
         self.assertEqual((self.target / "settings.json").read_text(encoding="utf-8"), text)
+
+
+class HooksPowerShellTool(Project):
+    """The three hooks treat a call of the PowerShell tool as they treat a Bash call."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "records").mkdir()
+        (self.root / "CLAUDE.md").write_text(PROJECT_RULES, encoding="utf-8")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "work")
+
+    def call(self, script, command):
+        text = json.dumps({"tool_name": "PowerShell", "tool_input": {"command": command}, "cwd": str(self.root)})
+        return subprocess.run([sys.executable, "-I", str(script)], input=text, capture_output=True, text=True)
+
+    def test_guard_blocks_a_powershell_write_to_data(self):
+        self.assertEqual(self.call(GUARD, "Remove-Item data/a.csv").returncode, 2)
+        self.assertEqual(self.call(GUARD, "Get-Content data/a.csv").returncode, 0)
+
+    def test_push_check_blocks_a_powershell_push(self):
+        self.assertEqual(self.call(HOOK, "git push").returncode, 2)  # no handoff, so stale
+
+    def test_confirm_asks_for_a_powershell_discard(self):
+        r = self.call(CONFIRM, "& py run_control.py discard demo")
+        self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_deploy_registers_the_hooks_for_both_shell_tools_and_updates_an_old_matcher(self):
+        target = Path(self.tmp.name) / "claude"
+        self.assertEqual(run(DEPLOY, "hooks", "--yes", "--target", str(target)).returncode, 0)
+        path = target / "settings.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        for g in cfg["hooks"]["PreToolUse"]:
+            self.assertIn("PowerShell", g["matcher"].split("|"), g)
+        # an install made by an earlier version has the Bash-only matchers: `hooks` brings them up to date
+        for g in cfg["hooks"]["PreToolUse"]:
+            g["matcher"] = "|".join(m for m in g["matcher"].split("|") if m != "PowerShell")
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        self.assertEqual(run(DEPLOY, "hooks", "--yes", "--target", str(target)).returncode, 0)
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(len(cfg["hooks"]["PreToolUse"]), 3)
+        for g in cfg["hooks"]["PreToolUse"]:
+            self.assertIn("PowerShell", g["matcher"].split("|"), g)
+
+
+class HookGuardShapes(HookGuard):
+    """Commands that only read data/ are allowed, and a few more that write are blocked."""
+
+    def test_reading_data_into_a_writer_elsewhere_is_allowed(self):
+        self.assertFalse(self.blocked("Bash", command="tee outputs/log.txt < data/x.csv"))
+        self.assertFalse(self.blocked("Bash", command="rm outputs/a.csv # keep data/a.csv"))
+        self.assertFalse(self.blocked("Bash", command="rm outputs/old.csv data/../outputs/x"))
+
+    def test_touch_and_a_path_that_climbs_back_into_data_are_blocked(self):
+        self.assertTrue(self.blocked("Bash", command="touch data/x.csv"))
+        self.assertTrue(self.blocked("Write", file_path=str(self.root / "outputs" / ".." / "data" / "x.csv")))
+        self.assertTrue(self.blocked("Bash", command="echo '# title' > data/x.csv"))
 
 
 class HookPushCheckForms(HookPushCheck):

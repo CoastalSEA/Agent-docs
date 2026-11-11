@@ -2,7 +2,9 @@ r"""Claude Code PreToolUse hook: ask the user before steps that only the user de
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
 
-The hook asks for confirmation (permissionDecision "ask") when a Bash command runs
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.2: the PowerShell tool is checked as Bash is)
+
+The hook asks for confirmation (permissionDecision "ask") when a Bash or PowerShell command runs
 - run_control.py reject or discard, or
 - archive_control.py archive or restore.
 These steps commit, tag, delete or restore output folders. The global rules say that only the user
@@ -19,7 +21,7 @@ import json
 import re
 import sys
 
-VERSION = "1.1"
+VERSION = "1.2"
 # (pattern within one command segment, message)
 ASK = [
     (re.compile(r"run_control\.py\b[^;&|\n]*?\s(reject|discard)(\s|$)"),
@@ -35,7 +37,7 @@ def main():
         return 0
     try:
         call = json.load(sys.stdin)
-        if call.get("tool_name") != "Bash":
+        if call.get("tool_name") not in ("Bash", "PowerShell"):
             return 0
         command = call.get("tool_input", {}).get("command", "")
         for pattern, message in ASK:

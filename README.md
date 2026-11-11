@@ -81,8 +81,8 @@ the work. The rules are in the global `CLAUDE.md` and the project `CLAUDE.md`; t
 **What is automatic and what is not:**
 
 - Automatic, with the push hook installed (`python deploy.py hooks`): `git push` is blocked while the
-  handoff is stale, so Claude writes a checkpoint first. The hook acts only in a project that has a
-  `records/` folder. Commits are not checked, so mid-task commits need no checkpoint.
+  handoff is stale, so Claude writes a checkpoint first. The hook acts only in a framework project (its
+  `CLAUDE.md` names `machine.md`, as every project template does) that has a `records/` folder. Commits are not checked, so mid-task commits need no checkpoint.
 - Not automatic: the checkpoint when you do not push, and the end-of-session wrap-up. Ask for them. Claude
   also suggests a checkpoint before a commit that closes a piece of work, and a wrap-up at the end of a session.
 - Without the hooks, the rules still apply, but nothing enforces them.
@@ -110,7 +110,7 @@ Four layers limit what a session can do, and they work in every permission mode:
 - **Hooks (optional, `python deploy.py hooks`).** One blocks `git push` while the handoff is stale, one blocks writes to `data/` and protected paths, and one asks before a run is rejected or discarded or an output folder is archived or restored.
 - **Run control.** `run_control.py` keeps each run pending until you review it, and its file guard and data check refuse to commit oversize files or changed inputs.
 
-The hooks guard against slips and are not a lock. `scripts/README.md` explains each hook, the commands that prompt, the commands that are refused, how permission modes change this, and how to change or turn off a hook (see `hook_confirm.py` there). `claude-md/global-CLAUDE.md` holds the rules.
+The push check and the `data/` guard act only in a framework project: a folder whose `CLAUDE.md` names `machine.md`. Any other folder is left alone, so a project with its own `data/` folder is not blocked. Paths listed in `rules/protected-paths.txt` are protected in every folder. The hooks guard against slips and are not a lock. `scripts/README.md` explains each hook, the commands that prompt, the commands that are refused, how permission modes change this, and how to change or turn off a hook (see `hook_confirm.py` there). `claude-md/global-CLAUDE.md` holds the rules.
 
 ## Tests
 
