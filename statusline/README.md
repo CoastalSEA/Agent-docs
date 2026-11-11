@@ -12,5 +12,4 @@ table in the root README.
 Prints one line: model, context usage bar, session (5 hour) usage %, week (7 day)
 usage %, and a spend slot. The spend slot shows the spend limit % when Claude Code
 supplies it, otherwise the estimated session cost in USD. Absent values show as `--`.
-Claude Code supplies no extra usage credit balance, so none is shown. See
-`records/DECISIONS.md` (rows dated 210926) for the reasons.
+Claude Code supplies no extra usage credit balance, so none is shown.

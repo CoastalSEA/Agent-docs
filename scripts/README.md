@@ -161,7 +161,7 @@ To change or disable the hook, edit the `ASK` list in `scripts/hook_confirm.py` 
 
 ## log_retention.py
 
-Claude Code deletes session transcripts older than `cleanupPeriodDays` (default 30; this setup uses 180). The `project-disclosure` skill and the log citations in the decision log read those transcripts. This script lists the transcripts of one project that will expire soon.
+Claude Code deletes session transcripts older than `cleanupPeriodDays` (default 30). The `project-disclosure` skill and the log citations in the decision log read those transcripts. This script lists the transcripts of one project that will expire soon.
 
 ```
 <python> log_retention.py [--root <project root>] [--warn-days N] [--days N] [--list] [--claude-dir DIR]

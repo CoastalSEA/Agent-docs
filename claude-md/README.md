@@ -1,9 +1,9 @@
 # claude-md
 
-Template `CLAUDE.md` files capturing established conventions (interpreter paths, writing
-rules, hard boundaries) so a new project can start from your existing standards rather than
-rebuilding them from scratch. Keep a global-scope template and a project-scope template
-separately, since they serve different purposes.
+Template `CLAUDE.md` files that hold the shared rules (method, outputs, hard boundaries), so a new
+project starts from the same standards. The global file and the project templates are kept
+separately, since they serve different purposes. What differs between users (interpreter paths,
+writing rules) is not here: it goes in the two local files made from the forms in `user-files/`.
 
 - `global-CLAUDE.md`: the version-controlled copy of the global file at
   `~/.claude/CLAUDE.md`. Machine-wide rules that every project inherits.

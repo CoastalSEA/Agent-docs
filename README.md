@@ -8,7 +8,9 @@ that control run outputs, check project records and set up projects. A deploy sc
 into your Claude configuration folder, and two small local files (`machine.md`, `profile.md`)
 hold what differs from one user to the next.
 
-Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux. Licensed under
+Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux with Python 3.12 (the
+CI workflow) and on Windows with Python 3.14; older versions are not tested. Three of the six skills need
+more than that (Word, EndNote or search connectors): see `skills/README.md`. Licensed under
 the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below. To set up a project,
 see Starting a project, which is in that section. To contribute, see `CONTRIBUTING.md`.
 
