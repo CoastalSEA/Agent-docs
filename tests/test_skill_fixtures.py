@@ -1156,6 +1156,15 @@ class ProofreadStructureFixture(Base):
         for reply, check in cases:
             self.assertFalse(self.results(reply)[check], check)
 
+    def test_cited_nowhere_counts_as_a_flag_and_the_entry_title_alone_does_not(self):
+        self.make_copy()
+        base = ("validator not run. Figure 2 has no cross-reference. Figure 3 has no caption. "
+                "Brown (2015) has no entry. Smith and Jones and Kirby match. See citation-check. ")
+        entry = 'The entry "Zeta Q, 2010, An unused source, Unused Press." '
+        self.assertTrue(self.results(base + entry + "is cited nowhere.")[self.c[8]])
+        self.assertTrue(self.results(base + entry + "is referred to nowhere in the text.")[self.c[8]])
+        self.assertFalse(self.results(base + entry + "is in the list.")[self.c[8]], "the title says unused")
+
     def test_a_flag_in_a_comment_counts_and_a_clause_boundary_separates_findings(self):
         self.make_copy(comments=["Figure 2 is never referred to in the text."])
         results = self.results("validator not run. Brown (2015) has no entry; Zeta is an orphan; Figure 3 has no caption. "

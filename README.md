@@ -174,6 +174,13 @@ own writing rules and code header format). They are never stored in this repo. `
 new folder and does not restore anything. It never touches `rules/machine.md`, `rules/profile.md`,
 `settings.json`, or skills and files that are not in this repository, and it never deletes.
 
+Read `claude-md/global-CLAUDE.md` before `apply`, because it becomes your global rules for every project. Some
+of its rules were written for research work: how to report a mean and a coefficient of determination, and never
+to change a bibliography entry. If a rule does not suit your work, change the repository copy before `apply`.
+
+To leave a skill out, list its name in `~/.claude/rules/skip-skills.txt`, one name per line (`#` starts a
+comment). `status` shows it as skipped and `apply` does not install it. `skills/README.md` lists what each skill needs.
+
 If you already have a `~/.claude/CLAUDE.md`, skills or scripts of your own:
 
 1. Run `python deploy.py status --diff` and read what would change.
@@ -242,7 +249,7 @@ configuration.
 | Repo file | Live file |
 |---|---|
 | `claude-md/global-CLAUDE.md` | `<target>/CLAUDE.md` |
-| `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`) | `<target>/skills/<name>/` |
+| `skills/<name>/` (each folder with a `SKILL.md`, every file in it except `docs/`; not a skill named in `<target>/rules/skip-skills.txt`) | `<target>/skills/<name>/` |
 | `scripts/*.py` (the project scripts and hook scripts) | `<target>/scripts/` |
 | the three hooks in `scripts/hook_*.py`, and with `--retention-notice` the `SessionStart` entry for `log_retention.py` (only the `hooks` command, not `apply`) | entries in `<target>/settings.json` |
 | `statusline/statusline-command.sh` (only the `statusline` command, not `apply`) | `<target>/statusline-command.sh`, and the `statusLine` entry in `<target>/settings.json` |

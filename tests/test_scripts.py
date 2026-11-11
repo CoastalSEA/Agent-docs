@@ -1638,6 +1638,42 @@ class DeploySettingsFile(DeployHooks):
         self.assertEqual((self.target / "settings.json").read_text(encoding="utf-8"), text)
 
 
+class DeploySkipSkills(Deploy):
+    """A skill named in <target>/rules/skip-skills.txt is not installed, not compared and never deleted."""
+
+    def skip(self, *lines):
+        (self.target / "rules").mkdir(parents=True, exist_ok=True)
+        (self.target / "rules" / "skip-skills.txt").write_text(NL.join(lines) + NL, encoding="utf-8")
+
+    def test_a_listed_skill_is_not_installed_and_the_rest_are(self):
+        self.skip("# no Word on this machine", "proofread", "", "citation-check  ")
+        r = self.dep("apply", "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertFalse((self.target / "skills" / "proofread").exists())
+        self.assertFalse((self.target / "skills" / "citation-check").exists())
+        self.assertTrue((self.target / "skills" / "document-adversary" / "SKILL.md").exists())
+        r = self.dep("status")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"skipped\s+skill proofread")
+        self.assertNotIn("MISSING", r.stdout)
+
+    def test_an_installed_skill_that_is_then_listed_is_left_alone(self):
+        self.assertEqual(self.dep("apply", "--yes").returncode, 0)
+        live = self.target / "skills" / "proofread" / "SKILL.md"
+        live.write_text("my own edit", encoding="utf-8")
+        self.skip("proofread")
+        r = self.dep("apply", "--yes")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(live.read_text(encoding="utf-8"), "my own edit")
+        self.assertIn("remove it by hand", self.dep("status").stdout)
+
+    def test_a_name_that_is_not_a_skill_is_reported(self):
+        self.skip("no-such-skill")
+        r = self.dep("status")
+        self.assertIn("no-such-skill", r.stdout)
+        self.assertIn("MISSING", r.stdout)  # nothing is skipped, so the empty target still needs every file
+
+
 class HooksPowerShellTool(Project):
     """The three hooks treat a call of the PowerShell tool as they treat a Bash call."""
 

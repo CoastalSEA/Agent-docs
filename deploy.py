@@ -3,7 +3,8 @@ r"""Deploy the Agent-docs master files to the Claude configuration folder.
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
 Modified using: claude-sonnet-5-5-v5.5-date: 091126 (init and help)
 Modified using: claude-sonnet-5-5-v5.5-date: 101126 (statusline)
-Modified using: claude-fable-5-2-v5.2-date: 111126 (settings.json with a byte order mark or that is not JSON)
+Modified using: claude-fable-5-2-v5.2-date: 111126 (settings.json with a byte order mark or that is not JSON;
+                the skip list for skills; hooks for the PowerShell tool)
 
 Compares the master files in this repository with the live copies in the Claude configuration
 folder, and copies the ones that differ. Creates the two local user files on a new machine.
@@ -50,6 +51,8 @@ Outputs:
   <target>/backups/deploy-<DDMMYY-HHMM>/<path under target>. Nothing is ever deleted.
   `init` writes <target>/rules/machine.md and profile.md only when they do not exist. Nothing
   else ever writes them. The blank forms are in claude-md/user-files/.
+Skills to leave out: <target>/rules/skip-skills.txt, one skill name per line (`#` starts a comment). A listed
+skill is not installed and not compared; a copy that is already installed is left alone.
 Line endings: files that differ only in line endings count as the same and are not copied.
 Not covered yet: agents, other hooks, MCP servers.
 """
@@ -75,11 +78,25 @@ REPO_COPIES = [
 MARKERS = {"machine.md": "machine-file-v1", "profile.md": "profile-file-v1"}
 
 
+def skip_list(target):
+    """The skill names in <target>/rules/skip-skills.txt (one per line, `#` starts a comment), in order."""
+    f = target / "rules" / "skip-skills.txt"
+    if not f.is_file():
+        return []
+    lines = [ln.strip() for ln in f.read_text(encoding="utf-8-sig", errors="replace").splitlines()]
+    return [ln for ln in lines if ln and not ln.startswith("#")]
+
+
+def repo_skills():
+    return [d.name for d in sorted((REPO / "skills").iterdir()) if d.is_dir() and (d / "SKILL.md").exists()]
+
+
 def items(target):
-    """Return (label, source, live) for every file to deploy."""
+    """Return (label, source, live) for every file to deploy. Skills in the skip list are left out."""
     out = [("global rules", REPO / "claude-md" / "global-CLAUDE.md", target / "CLAUDE.md")]
+    skip = set(skip_list(target))
     for d in sorted((REPO / "skills").iterdir()):
-        if d.is_dir() and (d / "SKILL.md").exists():
+        if d.is_dir() and (d / "SKILL.md").exists() and d.name not in skip:
             for f in sorted(p for p in d.rglob("*") if p.is_file() and "__pycache__" not in p.parts
                              and "docs" not in p.relative_to(d).parts[:-1]):
                 out.append(("skill " + d.name, f, target / "skills" / d.name / f.relative_to(d)))
@@ -135,6 +152,15 @@ def status(target, want_diff):
         print(f"  {flag}  {label:<24} {rel}")
         if want_diff and s == "differs":
             show_diff(src, dst)
+    known_skills = repo_skills()
+    for name in skip_list(target):
+        if name not in known_skills:
+            print(f"  note     rules/skip-skills.txt names {name}, which is not a skill in the repository")
+        elif (target / "skills" / name).exists():
+            print(f"  skipped  {'skill ' + name:<24} listed in rules/skip-skills.txt; the installed copy is left "
+                  f"alone and not updated (remove it by hand if it is not wanted)")
+        else:
+            print(f"  skipped  {'skill ' + name:<24} listed in rules/skip-skills.txt; not installed")
     if any(r[3] == "eol" for r in rows):
         print("\n  same* = differs only in line endings; not copied")
     live_only = []

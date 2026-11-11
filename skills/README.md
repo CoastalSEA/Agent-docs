@@ -12,9 +12,11 @@ See `../prompts/new-skill-workflow.md` for the draft-refine-deploy process to ru
 
 ## What each skill needs
 
-`deploy.py apply` installs all six skills. Every skill uses the Python and the run control command
-named in `machine.md`, except `proofread`, which uses the Python only. The table lists what else a skill needs. A skill
-that you cannot use can be removed from `~/.claude/skills/` by hand; the next `apply` installs it again.
+`deploy.py apply` installs all six skills, except those named in `~/.claude/rules/skip-skills.txt` (one
+name per line, `#` for a comment). Every skill uses the Python and the run control command
+named in `machine.md`, except `proofread`, which uses the Python only. The table lists what else a skill needs. List a skill
+that you cannot use in that file before `apply`. A copy that is already installed is left alone: remove its
+folder from `~/.claude/skills/` by hand.
 
 | Skill | Also needs | Sends data off the machine |
 |---|---|---|

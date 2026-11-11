@@ -1056,7 +1056,8 @@ class ProofreadStructure(Fixture):
     PROBLEM = re.compile(
         r"cross-?ref|not (?:referred|referenced|mentioned|cited|matched|found)|never (?:referred|referenced|mentioned|cited)"
         r"|isn't (?:referred|cited|mentioned)|nothing (?:refers|cites|in the text)|unreferenced|uncited|unmatched|unresolved"
-        r"|no (?:caption|matching|entry|reference|in-text|mention|citation)|missing|orphan", re.I)
+        r"|no (?:caption|matching|entry|reference|in-text|mention|citation)|missing|orphan"
+        r"|(?:cited|referenced|mentioned|referred to) nowhere|nowhere (?:cited|referenced|mentioned|referred)", re.I)
     checks_listed = (
         "the proofread copy is saved beside the original as '<name> - proofread.docx'",
         "the original is unchanged",
