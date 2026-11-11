@@ -1464,5 +1464,145 @@ class DeployStatusline(unittest.TestCase):
         self.assertFalse((self.target / "settings.json").exists())
 
 
+class RunControlRerunAndFailedCommit(Project):
+    """A rerun clears subfolders, a failed commit leaves no INDEX row, and a task name is not a prefix."""
+
+    def test_rerun_clears_files_in_subfolders_and_keeps_reports(self):
+        self.start_and_write()
+        figs = self.root / "outputs" / "demo" / "figs"
+        (figs / "deep").mkdir(parents=True)
+        (figs / "old.txt").write_text("old", encoding="utf-8")
+        (figs / "deep" / "older.csv").write_text("old", encoding="utf-8")
+        (figs / "notes.md").write_text("kept", encoding="utf-8")
+        self.accept(question="Q?")
+        r = self.rc("start", "demo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((figs / "old.txt").exists())
+        self.assertFalse((figs / "deep").exists(), "an emptied subfolder is removed")
+        self.assertTrue((figs / "notes.md").exists(), "reports are kept at any depth")
+        self.assertIn("subfolder", r.stderr)
+
+    def test_failed_commit_leaves_no_index_row_and_a_retry_adds_one(self):
+        self.start_and_write()
+        hook = self.root / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        before = (self.root / "outputs" / "INDEX.md").read_text(encoding="utf-8")
+        r = self.rc("accept", "demo", "Q?")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual((self.root / "outputs" / "INDEX.md").read_text(encoding="utf-8"), before)
+        self.assertEqual(self.tags(), [])
+        hook.unlink()
+        self.accept(question="Q?")
+        rows = self.index_rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0][3], "current")
+
+    def test_pending_task_with_a_longer_name_is_listed_at_start(self):
+        self.start_and_write(task="fit-2")
+        self.assertEqual(self.rc("start", "fit").returncode, 0)
+        info = (self.root / "outputs" / "fit" / "run_info.txt").read_text(encoding="utf-8")
+        self.assertIn("fit-2", info)
+
+
+class WrapupStatusDeletion(WrapupStatus):
+    """An uncommitted deletion of a tracked file counts as a change (its time is that of its folder)."""
+
+    def test_tracked_file_deleted_after_the_handoff_is_stale(self):
+        self.times(work_age=200, handoff_age=100)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "two")
+        self.assertEqual(self.st().returncode, 0)
+        self.work.unlink()
+        r = self.st()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("deleted", r.stdout)
+
+    def test_tracked_file_deleted_before_the_handoff_is_current(self):
+        import time
+        self.times(work_age=200, handoff_age=10)
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "two")
+        self.work.unlink()
+        old = time.time() - 100
+        os.utime(self.root, (old, old))
+        r = self.st()
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+
+class CheckRecordsCitedNames(CheckRecords):
+    """A missing bare name or a missing path in a git-ignored location is a flag; other missing paths fail."""
+
+    def cite(self, token):
+        with (self.root / "records" / "DECISIONS.md").open("a", encoding="utf-8") as f:
+            f.write(f"| 010126 | d | r | `{token}` |\n")
+
+    def test_missing_bare_name_is_a_flag(self):
+        for token in ("machine.md", ".docx", "backups/"):
+            self.cite(token)
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("machine.md", r.stdout)
+
+    def test_bracketed_text_is_not_a_path(self):
+        self.cite("[y/N]")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("[y/N]", r.stdout)
+
+    def test_missing_path_in_a_git_ignored_location_is_a_flag(self):
+        (self.root / ".gitignore").write_text("working_docs/\n", encoding="utf-8")
+        self.cite("working_docs/plan/test-plan.md")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("working_docs/plan/test-plan.md", r.stdout)
+
+    def test_missing_path_in_a_tracked_location_still_fails(self):
+        (self.root / ".gitignore").write_text("working_docs/\n", encoding="utf-8")
+        self.cite("code/gone.py")
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("code/gone.py", r.stdout)
+
+
+class DeploySettingsFile(DeployHooks):
+    """A settings.json with a byte order mark is read; one that is not JSON gives a message, not a traceback."""
+
+    def test_hooks_reads_a_settings_file_with_a_byte_order_mark(self):
+        self.target.mkdir()
+        (self.target / "settings.json").write_bytes(b"\xef\xbb\xbf" + json.dumps({"theme": "x"}).encode("utf-8"))
+        r = self.dep("hooks", "--yes")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = json.loads((self.target / "settings.json").read_text(encoding="utf-8-sig"))
+        self.assertEqual(cfg["theme"], "x")
+        self.assertEqual(len(cfg["hooks"]["PreToolUse"]), 3)
+
+    def test_hooks_and_statusline_refuse_a_file_that_is_not_json(self):
+        self.target.mkdir()
+        text = '{\n // a comment\n "theme": "x"}\n'
+        (self.target / "settings.json").write_text(text, encoding="utf-8")
+        for command in ("hooks", "statusline"):
+            r = self.dep(command, "--yes")
+            self.assertEqual(r.returncode, 1, command)
+            self.assertNotIn("Traceback", r.stderr, command)
+            self.assertIn("settings.json", r.stdout + r.stderr, command)
+        self.assertEqual((self.target / "settings.json").read_text(encoding="utf-8"), text)
+
+
+class HookPushCheckForms(HookPushCheck):
+    """A path before git, or git.exe, is still a push."""
+
+    def test_git_named_with_a_path_or_exe_is_blocked(self):
+        self.times(work_age=10, handoff_age=100)
+        for command in ("/usr/bin/git push", "git.exe push origin main", '"C:/Program Files/Git/bin/git.exe" push'):
+            self.assertEqual(self.hook(command).returncode, 2, command)
+
+    def test_words_that_end_in_git_are_not_a_push(self):
+        self.times(work_age=10, handoff_age=100)
+        for command in ("echo legit push", "ls digit push"):
+            self.assertEqual(self.hook(command).returncode, 0, command)
+
+
 if __name__ == "__main__":
     unittest.main()

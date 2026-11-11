@@ -3,6 +3,7 @@ r"""Deploy the Agent-docs master files to the Claude configuration folder.
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
 Modified using: claude-sonnet-5-5-v5.5-date: 091126 (init and help)
 Modified using: claude-sonnet-5-5-v5.5-date: 101126 (statusline)
+Modified using: claude-fable-5-2-v5.2-date: 111126 (settings.json with a byte order mark or that is not JSON)
 
 Compares the master files in this repository with the live copies in the Claude configuration
 folder, and copies the ones that differ. Creates the two local user files on a new machine.
@@ -424,7 +425,8 @@ def init(target, yes):
         return 1
     for path, text in plan:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8", newline="\n")
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
         print(f"Created {path}")
     print("\nNext: edit the files if needed, run `deploy.py apply` to install the shared files, then "
           "`deploy.py doctor`. Run `deploy.py help` for the full steps.")
@@ -465,12 +467,33 @@ def machine_python(target):
     return None
 
 
+def load_settings(path):
+    """The settings in <target>/settings.json ({} if there is no file), or None with a message if it is not JSON.
+
+    A byte order mark at the start of the file is accepted."""
+    import json
+    if not path.exists():
+        return {}
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (ValueError, OSError) as e:
+        print(f"{path} could not be read as JSON ({e}). Nothing written. Correct the file (JSON allows no "
+              f"comments and no trailing commas), then run the command again.")
+        return None
+    if not isinstance(cfg, dict):
+        print(f"{path} does not hold a JSON object. Nothing written.")
+        return None
+    return cfg
+
+
 def hooks(target, yes, optional=False):
     """Add the hooks in HOOKS (and OPTIONAL_HOOKS if asked) to <target>/settings.json, keeping every other
     setting. Idempotent."""
     import json
     path = target / "settings.json"
-    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    cfg = load_settings(path)
+    if cfg is None:
+        return 1
     changes = []
     for script, event, matcher, args in HOOKS + (OPTIONAL_HOOKS if optional else []):
         groups = cfg.setdefault("hooks", {}).setdefault(event, [])
@@ -522,7 +545,9 @@ def statusline(target, yes, replace=False):
         command = "bash ~/.claude/statusline-command.sh"
     else:
         command = f'bash "{dst.as_posix()}"'
-    cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    cfg = load_settings(path)
+    if cfg is None:
+        return 1
     current = cfg.get("statusLine")
     script = state(src, dst)
     mine = isinstance(current, dict) and "statusline-command.sh" in str(current.get("command", ""))

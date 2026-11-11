@@ -34,7 +34,7 @@ Prepares and closes the output folder of a task, `outputs/<task>/`. In a git pro
 
 | Command | What it does |
 |---|---|
-| `start <task>` | Prepares the folder, writes `run_info.txt` and prints the absolute path. Run it before a task writes outputs. |
+| `start <task>` | Prepares the folder, writes `run_info.txt` and prints the absolute path. Run it before a task writes outputs. On a rerun it removes the files of the earlier run, in subfolders too, and keeps `.md` reports. |
 | `path <task>` | Prints the folder a `start` would use. Changes nothing. |
 | `check <task> [--allow F]` | Runs the file guard and shows what `accept` would commit. |
 | `accept <task> ["question"] [--allow F]` | Guard, commit, annotated tag and `outputs/INDEX.md` row (if the project keeps one). |
@@ -46,6 +46,7 @@ Prepares and closes the output folder of a task, `outputs/<task>/`. In a git pro
 - Without a question, `accept` and `reject` reuse the question of the last tag of the task.
 - The file guard excludes `.pdf .docx .pptx .zip .7z .rar .gz .pyc` and Office lock files. Images may be up to 1 MB, other files up to 5 MB, and a folder up to 25 MB. `--allow <file>` (repeatable, path relative to the task folder) passes a named file.
 - Task names are reduced to letters, digits, `-` and `_`.
+- If the commit of `accept` or `reject` fails, nothing is tagged and `outputs/INDEX.md` is put back as it was. Fix the cause and run the command again.
 - Data check: `start` records the state of `data/` (names, sizes and times; not `DATA-NOTES.md` or README files) in `run_info.txt`. If `data/` differs later, `check` fails and `accept` and `reject` refuse, naming the files changed after the start. Deleted files are only counted. `--data-changed-ok` passes it once the user has reviewed the change. Runs without a record are not checked.
 
 Example: `<python> run_control.py start trend-fit --root "<project root>"`
@@ -68,7 +69,7 @@ Checks `data/DATA-NOTES.md`, `records/DECISIONS.md`, `outputs/INDEX.md` and the 
 <python> check_records.py [project root] [--root <project root>] [--max N] [--memory DIR] [--max-lines N]
 ```
 
-- Failures set exit code 1: cited paths that do not exist, bad session log citations, INDEX rows that do not match runs or tags, data files that do not match `DATA-NOTES.md`, memory index problems, and a decision row over 1,000 characters dated 091126 or later.
+- Failures set exit code 1: cited paths that do not exist (a missing bare name with no folder in it, or a missing path in a git-ignored location, is only a flag), bad session log citations, INDEX rows that do not match runs or tags, data files that do not match `DATA-NOTES.md`, memory index problems, and a decision row over 1,000 characters dated 091126 or later.
 - Flags are for review and do not set the exit code: stale memory notes, files changed after the entry that describes them, uncommitted outputs, decision rows over 800 characters, and a log with more than `--max-lines` rows (default 100) or 60,000 characters.
 - `--max N` limits the lines listed per flag (default 40).
 - `--memory DIR` overrides the memory folder (default `~/.claude/projects/<launch-folder-key>/memory/`).
@@ -83,7 +84,7 @@ Shows whether the handoff is current, so a checkpoint is not forgotten.
 <python> wrapup_status.py [--root <project root>] [--max-lines N] [--quiet]
 ```
 
-- The handoff is `records/HANDOFF.md`. It is stale when a changed file is newer than it. Changed files are uncommitted files and, if the branch has an upstream, files in commits not yet pushed. The handoff itself is not counted.
+- The handoff is `records/HANDOFF.md`. It is stale when a changed file is newer than it. Changed files are uncommitted files and, if the branch has an upstream, files in commits not yet pushed. The handoff itself is not counted. An uncommitted deletion of a tracked file counts too, with the time of the folder it was in. A deleted git-ignored file is not seen here; `check_records.py` reports a cited path that is missing.
 - The report gives the handoff age, the counts of uncommitted and unpushed files, pending runs, decision lines added since the last commit and the size of the decision log.
 - The last line is `Status: CURRENT` or `Status: STALE, a checkpoint is needed (...)`. `--quiet` prints only that line.
 - Exit code 0 if current, 1 if stale or missing, 2 if the folder cannot be used. No file is written.
@@ -121,7 +122,7 @@ Reports which project template level a project is at (minimal, handoff or full),
 
 A Claude Code `PreToolUse` hook. It stops `git push` while the handoff is stale, so the handoff goes with the work. It is not run by hand.
 
-- It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push` (words inside quotes or a here-document are ignored, except after `-c` or `eval`), and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
+- It reads the tool call as JSON on standard input. It acts only on Bash commands that contain `git push`, also with a path before `git` or as `git.exe` (words inside quotes or a here-document are ignored, except after `-c` or `eval`), and only in a project with a `records/` folder. It runs `wrapup_status.py` there.
 - If the handoff is stale or missing, it exits with code 2 and a message. Claude then writes a checkpoint and pushes again. In every other case, and on any error, it exits 0 and the call goes ahead. Commits are not checked.
 - Install it with `python deploy.py hooks` from the repository root (it installs all three hooks). That adds one entry for each to `~/.claude/settings.json`, using the interpreter named in `machine.md`, and backs the file up first. Start a new session for the hooks to load.
 - Test it by hand: `echo '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"<project root>"}' | <python> hook_push_check.py; echo $?`

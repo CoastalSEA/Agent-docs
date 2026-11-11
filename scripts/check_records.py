@@ -10,8 +10,9 @@ Inputs:  data/DATA-NOTES.md, records/DECISIONS.md and outputs/INDEX.md (a missin
 Outputs: a report on standard output. No file is written. Exit code 1 if any check fails, otherwise 0.
 Checks (a failure counts towards the exit code):
   1. every backticked path-like token in the three record files exists (relative to the project root, data/, outputs/
-     or records/; a bare file name is looked up anywhere under the root). Tokens with < > * { } | = and tokens that
-     start with 'log ' are skipped. '~/' paths and absolute paths are checked as written. A path under a task folder
+     or records/; a bare file name is looked up anywhere under the root). Tokens with < > * { } | = [ ] and tokens that
+     start with 'log ' are skipped. A name that is not found is a flag, not a failure, when it is a bare name (no
+     folder in it) or lies in a git-ignored location (git cannot hold it). '~/' paths and absolute paths are checked as written. A path under a task folder
      whose INDEX.md status is archived counts as existing (the folder is held by an archive tag: see archive_control.py).
   2. every citation of the form 'log <8 hex characters> L<n>' points to line n (1-based) of a session log whose file
      name starts with those characters, and that line is a user or assistant message.
@@ -50,6 +51,7 @@ Created using: Sonnet5-v1.0-date: 200926
  'run not found'; flag 11 for the products register. Ported from a project copy, 131026)
 (revised by claude-sonnet-5-5-v5.5-date: 081126: moved to scripts/; --root and --version)
 (revised by claude-sonnet-5-5-v5.5-date: 091126: version 1.1, checks 12 and 13 on the size of DECISIONS.md)
+(revised by claude-fable-5-2-v5.2-date: 111126: version 1.2, a missing bare name or git-ignored path is a flag)
 """
 import argparse
 import datetime as dt
@@ -60,7 +62,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 ROW_WARN, ROW_HARD, ROW_TARGET = 800, 1000, 500  # characters in a DECISIONS.md row
 HARD_FROM = (26, 11, 9)  # (year, month, day): rows dated on or after 091126 must keep to ROW_HARD
 MAX_CHARS = 60000  # characters in DECISIONS.md
@@ -95,7 +97,7 @@ def name_index(root):
 
 
 def pathlike(tok):
-    if any(c in tok for c in "<>*{}|=") or tok.startswith("log "):
+    if any(c in tok for c in "<>*{}|=[]") or tok.startswith("log "):
         return False
     return "/" in tok or "\\" in tok or re.search(EXT, tok, re.I) is not None
 
@@ -117,6 +119,23 @@ def resolve(tok, root, names):
     if first in ARCHIVED:  # a folder removed by archive_control.py: the archive tag holds it
         return root
     return None
+
+
+def soft_missing(tok, root):
+    """Why a cited name that was not found is a flag and not a failure, or None if it is a failure.
+
+    A bare name (no folder in it) may be a file kept elsewhere or a general term. A path in a git-ignored
+    location is local: git cannot hold it, so its absence is for review."""
+    rel = tok.replace("\\", "/").rstrip("/")
+    if "/" not in rel:
+        return "bare name"
+    if rel.startswith("~/") or re.match(r"^[A-Za-z]:/", rel) or rel.startswith("/"):
+        return None
+    try:
+        res = subprocess.run(["git", "check-ignore", "-q", "--", rel], cwd=root, capture_output=True, text=True)
+    except OSError:
+        return None
+    return "git-ignored location" if res.returncode == 0 else None
 
 
 def newest_mtime(path):
@@ -181,7 +200,7 @@ def main():
                 ARCHIVED_RUNS.add(cells[0].strip("`"))
 
     # 1. cited paths
-    n_tok, missing = 0, []
+    n_tok, missing, soft = 0, [], []
     for k, t in text.items():
         for tok in sorted(set(re.findall(r"`([^`\n]+)`", t))):
             tok = tok.strip()
@@ -189,11 +208,17 @@ def main():
                 continue
             n_tok += 1
             if resolve(tok, root, names) is None:
-                missing.append((k, tok))
+                why = soft_missing(tok, root)
+                (soft if why else missing).append((k, tok, why))
     print(f"1. Cited paths: {n_tok} checked, {len(missing)} not found")
-    for k, tok in missing[:args.max]:
+    for k, tok, _ in missing[:args.max]:
         print(f"     NOT FOUND in {k}: {tok}")
     failures += len(missing)
+    if soft:
+        print(f"   Flag: {len(soft)} cited names not found that are a bare name or in a git-ignored location")
+        for k, tok, why in soft[:args.max]:
+            print(f"     not found in {k} ({why}): {tok}")
+        flags += len(soft)
 
     # 2. session log citations
     cites = {}

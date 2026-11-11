@@ -2,8 +2,8 @@
 
 Two modes, chosen from the project root:
 - tracked: the project is a git repository and outputs/ is not git-ignored. A run overwrites
-  outputs/<task>/: its files other than .md are removed first, and reports (.md), which are
-  edited in place, are kept. A new run is pending (uncommitted) until the user reviews it. A
+  outputs/<task>/: its files other than .md are removed first, in its subfolders too (a subfolder
+  left empty is removed), and reports (.md), which are edited in place, are kept. A new run is pending (uncommitted) until the user reviews it. A
   rerun replaces a pending run, with a warning (trial from 240926). Only the user decides to
   accept, reject or discard a run; the commands below then do the git steps.
 - run folder: the project is not a git repository, or outputs/ is git-ignored. Each run gets a
@@ -64,6 +64,8 @@ Modified using: Claude Sonnet-v5.5-date: 290926 (check resolves the latest run f
 Modified using: claude-sonnet-5-5-v5.5-date: 081126 (version 1.1: --root accepted anywhere in the command line,
                 including accept/reject without a question)
 Modified using: claude-sonnet-5-5-v5.5-date: 091126 (version 1.2: data check)
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.3: a rerun clears subfolders; a failed commit
+                leaves no INDEX.md row; a task name is not read as a prefix of another)
 """
 
 import argparse
@@ -75,7 +77,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-VERSION = "1.2"
+VERSION = "1.3"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {".pdf", ".docx", ".pptx", ".zip", ".7z", ".rar", ".gz", ".pyc"}
 IMAGES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp"}
@@ -154,10 +156,21 @@ def start_run(task, root=None):
         if changes(root, rel):
             print(f"Warning: {rel}/ held a run pending review; it is replaced by this run "
                   f"(.md files are kept).", file=sys.stderr)
-        # Reports (.md) are edited in place in the task folder, so they survive a rerun.
-        for p in out.iterdir():
-            if p.is_file() and p.suffix.lower() != ".md":
+        # Reports (.md) are edited in place in the task folder, so they survive a rerun. Everything else
+        # goes, at any depth (deepest first), and a subfolder left empty is removed.
+        below = 0
+        for p in sorted(out.rglob("*"), reverse=True):
+            if p.is_dir() and not p.is_symlink():
+                try:
+                    p.rmdir()
+                except OSError:
+                    pass  # still holds a report
+            elif p.suffix.lower() != ".md":
                 p.unlink()
+                below += p.parent != out
+        if below:
+            print(f"Removed {below} file(s) of the earlier run from the subfolders of {rel}/ "
+                  f"(.md files are kept).", file=sys.stderr)
     info = [f"task: {clean_task(task)}",
             f"mode: {mode}",
             f"{'proposed tag' if mode == 'tracked' else 'run folder'}: {name}",
@@ -168,7 +181,7 @@ def start_run(task, root=None):
         rel = out.relative_to(root).as_posix()
         commit = git(root, "rev-parse", "--short", "HEAD", check=False).stdout.strip() or "none"
         status = [ln for ln in git(root, "status", "--porcelain", "-uall").stdout.splitlines()
-                  if not ln[3:].startswith(rel)]
+                  if not ln[3:].startswith(rel + "/")]
         # Other tasks' pending outputs are separate runs, reviewed on their own: never commit them with this one.
         dirty = [ln for ln in status if not ln[3:].startswith("outputs/")]
         pending = sorted({ln[3:].split("/")[1] for ln in status
@@ -383,14 +396,25 @@ def cmd_accept(task, root, question, allow, rejected=False, data_ok=False):
     question = question or last_question(root, task)
     if not question:
         raise SystemExit(f"No earlier run of {task} to take the question from: give the question.")
+    index = root / "outputs" / "INDEX.md"
+    index_before = index.read_bytes() if index.exists() else None
     indexed = update_index(root, task, tag, question, "not adopted" if rejected else "current")
     paths = [rel] + (["outputs/INDEX.md"] if indexed else []) + (["code"] if (root / "code").is_dir() else [])
-    git(root, "add", "-A", "--", *paths)
     message = question + ("\n\nAllowed by the user although over the file guard:\n" + "\n".join(allowed)
                           if allowed else "")
     message += f"\n\nRun control version: {read_info(folder).get('run control version', 'not recorded')}"
-    # Commit only these paths, so anything else the user has staged stays out of the run's commit.
-    git(root, "commit", "-q", "-m", f"{'Reject' if rejected else 'Accept'} {tag}: {question}", "--", *paths)
+    try:
+        git(root, "add", "-A", "--", *paths)
+        # Commit only these paths, so anything else the user has staged stays out of the run's commit.
+        git(root, "commit", "-q", "-m", f"{'Reject' if rejected else 'Accept'} {tag}: {question}", "--", *paths)
+    except SystemExit:
+        # No commit was made: take the row back out, so that a retry does not add it twice.
+        if indexed:
+            index.write_bytes(index_before)
+            git(root, "reset", "-q", "--", "outputs/INDEX.md", check=False)
+        print("Nothing was committed or tagged; outputs/INDEX.md is as it was. Fix the cause and accept again.",
+              file=sys.stderr)
+        raise
     git(root, "tag", "-a", tag, "-m", message)
     print(f"Committed and tagged {tag} ({'not adopted' if rejected else 'current'})."
           + ("" if indexed else " This project keeps no outputs/INDEX.md, so the tag is the record."))

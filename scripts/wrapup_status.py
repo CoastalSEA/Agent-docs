@@ -1,11 +1,14 @@
 r"""Report whether the handoff is current, so a checkpoint or wrap-up is not forgotten.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: an uncommitted deletion counts as a change)
 
 The handoff is `records/HANDOFF.md`. It is git-ignored in some projects, so its file time is the only
 record of when it was written. It is stale when a changed file is newer than it. Changed files are
 the uncommitted tracked or new files and, when the branch has an upstream, the files changed by
-commits not yet pushed. `records/HANDOFF.md` itself is not counted. A checkpoint rewrites the handoff
+commits not yet pushed. `records/HANDOFF.md` itself is not counted. An uncommitted deletion of a tracked
+file is a change too: a deleted file has no time, so the time of the nearest folder that still exists is
+used (a folder's time moves when an entry is added to it or removed from it). A checkpoint rewrites the handoff
 after the work it describes, so the handoff then becomes current.
 
 Usage: wrapup_status.py [--root <project root>] [--max-lines N] [--quiet] [--version]
@@ -24,7 +27,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 ROW = re.compile(r"^\| \d{6} \|")
 TOLERANCE = 2.0  # seconds: files written in the same wrap-up step
 
@@ -49,15 +52,25 @@ def git(root, *args):
 
 
 def changed_paths(root):
-    """(uncommitted paths, paths changed by unpushed commits or None if there is no upstream)."""
+    """(uncommitted paths, paths changed by unpushed commits or None if there is no upstream, deleted paths)."""
     code, out = git(root, "status", "--porcelain=v1", "-z", "-uall", "--no-renames")
-    uncommitted = [e[3:] for e in out.split("\0") if len(e) > 3]
+    entries = [e for e in out.split("\0") if len(e) > 3]
+    uncommitted = [e[3:] for e in entries]
+    deleted = [e[3:] for e in entries if "D" in e[:2]]
     code, _ = git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     unpushed = None
     if code == 0:
         code, out = git(root, "diff", "--name-only", "-z", "@{u}..HEAD")
         unpushed = [p for p in out.split("\0") if p] if code == 0 else None
-    return uncommitted, unpushed
+    return uncommitted, unpushed, deleted
+
+
+def folder_time(root, rel):
+    """The time of the nearest folder above a deleted path that still exists."""
+    folder = (root / rel).parent
+    while not folder.is_dir() and folder != root:
+        folder = folder.parent
+    return folder.stat().st_mtime
 
 
 def stamp(t):
@@ -89,9 +102,11 @@ def main(argv):
         if not in_repo:
             out.append("Not a git repository: whether work followed the handoff was not checked.")
         else:
-            uncommitted, unpushed = changed_paths(root)
+            uncommitted, unpushed, deleted = changed_paths(root)
             names = {p for p in (uncommitted + (unpushed or [])) if p.replace("\\", "/") != "records/HANDOFF.md"}
             times = [((root / p).stat().st_mtime, p) for p in sorted(names) if (root / p).is_file()]
+            times += [(folder_time(root, p), p + " (deleted)") for p in sorted(set(deleted) & names)
+                      if not (root / p).exists()]
             newer = [(t, p) for t, p in times if t - hm > TOLERANCE]
             if unpushed is None:
                 ahead = "no upstream"

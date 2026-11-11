@@ -1,9 +1,10 @@
 r"""Claude Code PreToolUse hook: stop a `git push` while the handoff is stale.
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
+Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: git named with a path or as git.exe)
 
 The hook receives the tool call as JSON on standard input. It acts only on Bash commands that contain
-`git push` (not inside quoted text or a here-document, except after `-c` or `eval`) and only in a project that has a `records/` folder. It runs wrapup_status.py for that
+`git push` (also with a path before `git`, or `git.exe`; not inside quoted text or a here-document, except after `-c` or `eval`) and only in a project that has a `records/` folder. It runs wrapup_status.py for that
 project. If the handoff is stale or missing, the hook exits with code 2 and a message, which blocks the
 push and tells Claude to write a checkpoint first. Any other case, and any error, lets the call go
 ahead: the hook never blocks because of its own fault.
@@ -20,8 +21,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
-PUSH = re.compile(r"(^|[;&|(\s\"'])git(\s+-\S+(\s+\S+)?)*\s+push([\s\"';&|)]|$)")
+VERSION = "1.1"
+PUSH = re.compile(r"(^|[;&|(\s\"'])([^\s\"';&|()]*[\\/])?git(\.exe)?(\s+-\S+(\s+\S+)?)*\s+push([\s\"';&|)]|$)", re.I)
+# a quoted program path that ends in git or git.exe, as in "C:/Program Files/Git/bin/git.exe" push
+QUOTED_GIT = re.compile(r"(\"[^\"\n]*[\\/]git(\.exe)?\"|'[^'\n]*[\\/]git(\.exe)?')", re.I)
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n)(.*?)(\n[ \t]*\3[ \t]*(?:\n|$))", re.S)
 # quoted text is not a command, unless it follows `-c` or `eval` (bash -c "git push")
 QUOTED = re.compile(r"(?<!-c )(?<!eval )(\"[^\"]*\"|'[^']*')")
@@ -30,6 +33,7 @@ QUOTED = re.compile(r"(?<!-c )(?<!eval )(\"[^\"]*\"|'[^']*')")
 def inert_removed(command):
     """The command without here-document bodies and quoted text, so words inside them are not read as a command."""
     command = HEREDOC.sub(lambda m: m.group(1) + m.group(5), command)
+    command = QUOTED_GIT.sub("git", command)
     return QUOTED.sub('""', command)
 
 

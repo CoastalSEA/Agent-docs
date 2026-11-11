@@ -258,8 +258,9 @@ def init(root, level, templates, apply):
                 if block and comments:
                     block.append("")
                 block += comments + [line]
-            f.write_text(text + ("" if not text or text.endswith("\n") else "\n") + ("\n" if text else "")
-                         + "\n".join(block) + "\n", encoding="utf-8", newline="")
+            with open(f, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text + ("" if not text or text.endswith("\n") else "\n") + ("\n" if text else "")
+                         + "\n".join(block) + "\n")
     elif add or ignore:
         print("Dry run: nothing written. Add --apply to write.")
     return 0
