@@ -15,6 +15,8 @@ see Starting a project, which is in that section. To contribute, see `CONTRIBUTI
 ## Structure
 
 ```
+CONTRIBUTING.md  how to report a problem or propose a change
+.github/    the CI workflow and the issue templates
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | statusline | doctor)
 scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
 agents/     template for defining and tasking subagents
