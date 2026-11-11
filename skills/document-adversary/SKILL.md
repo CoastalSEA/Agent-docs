@@ -86,7 +86,7 @@ or say `earlier reviews: independent`.
    in the system temp folder (the output location an argument, or a relative
    path) and report the result, including null results. Do every recomputation
    this way and use the script's output. Work by hand only for a trivial sum,
-   and label such a figure "by hand". Label evidence from
+   and label such a figure "by hand". Print p-values in scientific notation when they are below 1e-3. Label evidence from
    your own simulation as a **reviewer simulation**, state what was computed and
    its set-up, and list the check under Not checked as a candidate for
    `analysis-adversary`. Where a check needs the full data or code of an

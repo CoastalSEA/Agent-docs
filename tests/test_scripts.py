@@ -880,14 +880,15 @@ class HookConfirm(unittest.TestCase):
         self.assertEqual(run(CONFIRM, "--version").stdout.strip(), f"hook_confirm.py {version_of(CONFIRM)}")
 
     def test_the_users_decisions_ask(self):
-        for cmd in ('python rc/run_control.py accept demo "Q?" --root p', "python run_control.py reject demo",
+        for cmd in ('python rc/run_control.py reject demo "Q?" --root p', "python run_control.py reject demo",
                     "python run_control.py --root p discard demo", "python archive_control.py archive demo",
-                    "python archive_control.py restore demo --root p", "ls && python run_control.py accept demo"):
+                    "python archive_control.py restore demo --root p", "ls && python run_control.py discard demo"):
             self.assertTrue(self.asks(cmd), cmd)
 
     def test_other_calls_do_not_ask(self):
         for cmd in ("python run_control.py start demo", "python run_control.py check demo",
-                    "python run_control.py status", "python archive_control.py list", "git status"):
+                    "python run_control.py status", "python archive_control.py list", "git status",
+                    "python run_control.py accept demo"):
             self.assertFalse(self.asks(cmd), cmd)
         self.assertFalse(self.asks("python run_control.py accept demo", tool="Read"))
 

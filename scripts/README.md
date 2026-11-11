@@ -24,7 +24,7 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `project.py` | Report the project template level and add the missing template files |
 | `hook_push_check.py` | Claude Code hook: block `git push` while the handoff is stale |
 | `hook_guard.py` | Claude Code hook: block writes to `data/` and to listed protected paths |
-| `hook_confirm.py` | Claude Code hook: ask the user before accept, reject, discard, archive or restore |
+| `hook_confirm.py` | Claude Code hook: ask the user before reject, discard, archive or restore |
 | `log_retention.py` | Report session transcripts of a project that will be deleted soon; optional start-of-session notice |
 | `check_docx_skill.py` | Find the `docx` skill scripts that `proofread` uses, check their interface and warn when they change |
 
@@ -138,7 +138,7 @@ A `PreToolUse` hook that blocks writes to protected files with exit code 2 and a
 
 ## hook_confirm.py
 
-A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs `run_control.py accept`, `reject` or `discard`, or `archive_control.py archive` or `restore`. These steps commit, tag, delete or restore output folders, and only the user decides them. Other calls are allowed. To cover another step, add a line to the `ASK` list in the script.
+A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs `run_control.py reject` or `discard`, or `archive_control.py archive` or `restore`. These steps commit, tag, delete or restore output folders, and only the user decides them. Other calls are allowed. `accept` is not covered: the user's instruction to accept is the permission, as the global rules say. To cover another step, add a line to the `ASK` list in the script.
 
 ## log_retention.py
 

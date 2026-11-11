@@ -148,6 +148,12 @@ own writing rules and code header format). They are never stored in this repo. `
 5. **New Claude session.** Ask it to quote the `Marker:` line of each file. A missing rules file
    fails silently, and `doctor` cannot test that a session loads the files.
 
+   In a project folder, a skill or a session that reads `~/.claude/rules/machine.md` is reading outside the
+   working directory, and Claude Code may ask first ("Read outside the working directories", with an option to keep
+   allowing such reads). If the answer is no, or the read is blocked, a session cannot see `machine.md` and a
+   subagent reports that it cannot find it. Allow the read, or add the allow rule `Read(~/.claude/rules/**)` to
+   `~/.claude/settings.json`.
+
 **Before you run `apply`.** `apply` overwrites a live file that differs from its repository copy: your
 `~/.claude/CLAUDE.md`, any skill with the same name as one in `skills/`, and the scripts in
 `~/.claude/scripts/`. Edits you made to those live files are replaced. It copies each file it replaces to
@@ -165,7 +171,7 @@ If you already have a `~/.claude/CLAUDE.md`, skills or scripts of your own:
 4. Try it on a scratch folder first: `python deploy.py apply --target <empty folder>`.
 
 Optional: `python deploy.py hooks` adds three hooks to `~/.claude/settings.json`: block `git push` while
-`records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before accept, reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). `python deploy.py hooks --retention-notice` also adds a start-of-session notice when session transcripts of the project are about to be deleted (`scripts/log_retention.py`; the retention period is `cleanupPeriodDays` in `settings.json`). It uses the interpreter named on the Python
+`records/HANDOFF.md` is stale, block writes to `data/` and listed protected paths, and ask before reject, discard, archive and restore (`scripts/hook_*.py`, usage in `scripts/README.md`). `python deploy.py hooks --retention-notice` also adds a start-of-session notice when session transcripts of the project are about to be deleted (`scripts/log_retention.py`; the retention period is `cleanupPeriodDays` in `settings.json`). It uses the interpreter named on the Python
 line of `rules/machine.md` (the Python running `deploy.py` if there is none), so run `init` and `apply` first. It backs up `settings.json` and keeps other settings.
 
 In a Claude session, ask the user before running `init`, `apply` or `hooks`, because each writes under

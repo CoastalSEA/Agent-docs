@@ -243,7 +243,7 @@ After the report, return every scratch script that supports a number in it as
 text, each under its own line `FILE: <deliverable folder>/code/<script name>`
 followed by the script in a code fence. Write each script so that the output
 location is an argument or a relative path, so a rerun from the saved folder
-works. The invoking session writes them to `code/` in the run folder.
+works. Print p-values in scientific notation when they are below 1e-3, so a small value does not show as 0.0. The invoking session writes them to `code/` in the run folder.
 
 The output folder comes from the shared run script (global Outputs rules), run
 for `<project-root>`: the absolute path of the cwd the skill was invoked from,
