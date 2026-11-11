@@ -214,6 +214,10 @@ file) and full (adds the data notes, the output index, the decision log and a `.
 4. **Claude session.** Start Claude Code from the project root. In the first reply of each session the model runs
    `project.py status` and tells you when the project has outgrown its level. To move up, run `init` again with
    `--level handoff` or `--level full`. An existing `CLAUDE.md` is left as it is, and you merge the new one by hand.
+5. **Claude session.** Check the setup: ask "check project setup is clean". The model reports the template level,
+   the files that are missing and whether the folder is a git repository. If it is not, the model may offer to run
+   `git init`, and you can answer yes. Without git, each run gets its own `outputs/<task>-<DDMMYY>-run<N>/` folder
+   and the run control steps that tag and commit do not apply.
 
 ### Commands
 
