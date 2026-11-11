@@ -138,7 +138,25 @@ A `PreToolUse` hook that blocks writes to protected files with exit code 2 and a
 
 ## hook_confirm.py
 
-A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs `run_control.py reject` or `discard`, or `archive_control.py archive` or `restore`. These steps commit, tag, delete or restore output folders, and only the user decides them. Other calls are allowed. `accept` is not covered: the user's instruction to accept is the permission, as the global rules say. To cover another step, add a line to the `ASK` list in the script.
+A `PreToolUse` hook that makes Claude Code ask the user before a Bash command runs a step that only the user decides. These steps commit, tag, delete or restore output folders, so a permission prompt is shown even where Bash commands are otherwise allowed. It acts on a Bash call only, and any other call, and any error, is allowed without comment.
+
+The `ASK` list in the script holds the steps that prompt:
+
+| Command | Why it asks |
+|---|---|
+| `run_control.py reject` or `discard` | Only the user rejects or discards a run. |
+| `archive_control.py archive` or `restore` | Archiving or restoring an output folder changes the project tags and files. |
+
+`run_control.py accept` is not on the list: the user's instruction to accept is the permission, as the global rules say. `start`, `check`, `path`, `status` and `archive_control.py list` do not prompt either.
+
+**What else prompts or blocks.** The hook is one of several protections, and they work together:
+
+- **Prompts in every permission mode.** The `ask` rules in `~/.claude/settings.json` (for example `git push *` and `gh repo edit *`) and this hook. `deploy.py` installs the hooks and does not write permission rules: those are in your own `settings.json`.
+- **Refused without a prompt.** Deny rules in `settings.json` (for example reads of `~/.ssh` and `.env` files, force pushes, `git reset --hard`, `git clean -f`, `gh repo delete`), `hook_push_check.py` while the handoff is stale, and `hook_guard.py` for writes to `data/` and protected paths.
+- **Depends on the mode.** In auto mode, other shell, Python and PowerShell calls are judged by Claude Code's own checks. In the default mode each of them prompts. A read outside the working directory (for example `~/.claude/rules/machine.md` from a project folder) may prompt once.
+- **Rule order.** Claude Code applies deny, then ask, then allow, and the first match wins. An ask rule prompts even where an allow rule matches, and a hook's allow does not skip an ask rule.
+
+To change or disable the hook, edit the `ASK` list in `scripts/hook_confirm.py` in the repository and run `deploy.py apply` (a change made only to the live copy in `~/.claude/scripts/` is overwritten by the next `apply`), or delete its entry from `settings.json` to turn it off. Start a new session for the change to take effect.
 
 ## log_retention.py
 

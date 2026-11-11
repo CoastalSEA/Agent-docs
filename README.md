@@ -99,6 +99,17 @@ the work. The rules are in the global `CLAUDE.md` and the project `CLAUDE.md`; t
 
 Usage of each script, and the commands to run them, are in `scripts/README.md`.
 
+## Protection and permissions
+
+Four layers limit what a session can do, and they work in every permission mode:
+
+- **Rules.** The global `CLAUDE.md` says to ask before any step that sends data off the machine or changes a live system, never to touch input data or bibliography entries, and that a direct instruction to do a named step is the permission for it.
+- **Permission rules in `settings.json`.** Ask rules prompt before a push, and deny rules refuse reads of secrets, force pushes and other destructive commands. You write these yourself: `deploy.py` does not install them.
+- **Hooks (optional, `python deploy.py hooks`).** One blocks `git push` while the handoff is stale, one blocks writes to `data/` and protected paths, and one asks before a run is rejected or discarded or an output folder is archived or restored.
+- **Run control.** `run_control.py` keeps each run pending until you review it, and its file guard and data check refuse to commit oversize files or changed inputs.
+
+The hooks guard against slips and are not a lock. `scripts/README.md` explains each hook, the commands that prompt, the commands that are refused, how permission modes change this, and how to change or turn off a hook (see `hook_confirm.py` there). `claude-md/global-CLAUDE.md` holds the rules.
+
 ## Tests
 
 ```
