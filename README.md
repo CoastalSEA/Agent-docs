@@ -143,7 +143,9 @@ Two small files hold what differs from one user to the next: `~/.claude/rules/ma
 system, shells, interpreter and tool paths, and locations) and `~/.claude/rules/profile.md` (your
 own writing rules and code header format). They are never stored in this repo. `init` creates both.
 
-1. **Terminal.** Run `python deploy.py init`. It detects the operating system, shells, Python,
+1. **Terminal.** Run `python <path>/deploy.py init`, where `<path>` is the full path of this repository
+   (it is different on each machine). The short form `python deploy.py init` works
+   only when the terminal is already in the repository folder. It detects the operating system, shells, Python,
    and R, MATLAB and Tesseract if they are installed. It shows what it found and the text it will
    write, then asks `[y/N]`. It creates `machine.md` and a short `profile.md` stub, and it never
    overwrites a file that exists. To do this by hand instead, copy
@@ -214,8 +216,10 @@ file) and full (adds the data notes, the output index, the decision log and a `.
 `claude-md/README.md` says when to move up. `scripts/project.py` sets a project up (the command forms are in
 `machine.md`; details are in `scripts/README.md`):
 
-1. **Terminal, in the project folder.** Preview the files: `project.py init --level minimal --templates <path to
-   this repository>/claude-md`. This is a dry run and writes nothing.
+1. **Terminal, in the project folder.** Preview the files:
+   `python <path>/scripts/project.py init --level minimal --templates <path>/claude-md`, where `<path>` is the full
+   path of this repository (it is different on each machine, and a relative path does not work from the project
+   folder). This is a dry run and writes nothing.
 2. **Terminal.** Add `--apply` to write them. It adds only what is missing, never overwrites a file, and adds
    the missing lines to `.gitignore`.
 3. **Editor.** Replace the placeholder sentence in the new `CLAUDE.md` with one or two sentences on what the
