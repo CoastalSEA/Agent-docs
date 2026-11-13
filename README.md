@@ -295,4 +295,4 @@ configuration.
 
 ## Acknowledgement
 
-The starting point for many of the ideas contained in this repo, especially the structure of prompts, skills and hooks comes from the excellent course led by Prof. Charles Crabtree (see https://charlescrabtree.org/), entitled "AI Agent-Driven Research Workflows", organised by AI Horizons.
+The starting point for many of the ideas contained in this repo, especially the structure of prompts, skills and hooks comes from the excellent course entitled "AI Agent-Driven Research Workflows", organised by AI Horizons.
