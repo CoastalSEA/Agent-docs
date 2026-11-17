@@ -15,7 +15,7 @@ What decision does this task support?
 | Difficulty of reversing the action |  |  |  |
 | Data sensitivity |  |  |  |
 
-Any task that edits input data or a bibliography entry, or sends data off this machine, is High and stays under direct control (Hard boundaries in the global `CLAUDE.md`).
+Any task that attempts to write to files supplied as input data, create, edit or delete a bibliography entry, or send data off this machine, is High and stays under direct control (Hard boundaries in the global `CLAUDE.md`).
 
 ## Decision
 

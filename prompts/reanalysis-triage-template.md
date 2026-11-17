@@ -1,6 +1,6 @@
 # Reanalysis triage prompt template
 
-A follow-on step after `analysis-adversary` runs: reads the source report
+A follow-on step after `analysis-adversary` or `document-adversary` runs: reads the source report
 and the adversarial-review report together and recommends, per finding,
 whether it warrants reanalysis, a caveat added to the existing report, or
 further investigation — with reasoning shown. Deliberately **not** a
