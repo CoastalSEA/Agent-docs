@@ -361,7 +361,7 @@ print(f"k = {-slope:.3f} per day")
             with open(f, encoding="utf-8", errors="replace") as fh:
                 for line in fh:
                     for m in re.finditer(r'"command":\s*"((?:[^"\\]|\\.)*)"', line):
-                        if re.search(r"(python\S*|\bpy)\s+(-\S+\s+)*\S*fit_decay\.py", m.group(1).replace("\\\\", "/")):
+                        if re.search(r"(python\S*|\bpy)\s+(-\S+\s+)*(\S*[/\\])?fit_decay\.py", m.group(1).replace("\\\\", "/")):
                             ran.append(m.group(1)[:100])
         add(self.checks_listed[4], not ran, f"commands that ran it: {ran[:2]}")
         add(self.checks_listed[5], tree_hashes(root) == before)

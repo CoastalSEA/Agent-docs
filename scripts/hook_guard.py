@@ -4,10 +4,12 @@ Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {da
 Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: data/ is guarded in a framework project only;
                 the PowerShell tool is checked as Bash is; touch is a writer; a word after `<`, a comment and a/../b
                 are read correctly)
+Modified using: claude-sonnet-5-5-v5.5-date: 171126 (version 1.2: the project is the nearest folder, from the session
+                folder upwards, whose CLAUDE.md names machine.md; relative paths are read against the session folder)
 
 Protected: the project `data/` folder (input data), except `data/DATA-NOTES.md` and README files, in a
-framework project only (the `CLAUDE.md` in the session folder names `machine.md`, as every project template
-does; any other folder may write to its own `data/`). Protected in every folder: every path listed in `<claude folder>/rules/protected-paths.txt` (one absolute path per line, a file
+framework project only (the session folder, or a folder above it, has a `CLAUDE.md` that names `machine.md`, as every
+project template does; that folder is the project root; any other folder may write to its own `data/`). Protected in every folder: every path listed in `<claude folder>/rules/protected-paths.txt` (one absolute path per line, a file
 or a folder, `#` starts a comment; for example the EndNote library and its .Data folder).
 
 The hook checks two kinds of call:
@@ -36,7 +38,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 GUARD_DATA = True  # set in main: False when the session folder is not a framework project
 FILE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 WRITERS = re.compile(r"(^|\s)(rm|mv|tee|touch|del|erase|truncate|remove-item|move-item|set-content|add-content|"
@@ -59,10 +61,21 @@ def config_paths():
     return [norm(ln).rstrip("/") for ln in lines if ln and not ln.startswith("#")]
 
 
-def framework_project(root):
+def names_machine_md(folder):
     """True if the CLAUDE.md in the folder names machine.md, as every project template does."""
-    f = Path(root) / "CLAUDE.md"
+    f = Path(folder) / "CLAUDE.md"
     return f.is_file() and "machine.md" in f.read_text(encoding="utf-8", errors="replace")
+
+
+def project_root(cwd):
+    """The session folder, or the nearest folder above it, whose CLAUDE.md names machine.md; None if there is none.
+    The Claude configuration folder is not a project root when found above the session folder."""
+    cwd = Path(cwd).absolute()  # not resolved: the paths in the call are not
+    config = Path(__file__).resolve().parent.parent
+    for folder in (cwd, *cwd.parents):
+        if names_machine_md(folder) and (folder == cwd or folder.resolve() != config):
+            return folder
+    return None
 
 
 def inside(path, base):
@@ -86,22 +99,20 @@ def protected_file(path, root, listed):
     return None
 
 
-def protected_word(word, root, listed, base=None):
-    """Does one word of a command name a protected path? Relative words are read against `base`
-    (the folder the command is in; the project root unless an earlier `cd` moved it). base "?" means unknown."""
+def protected_word(word, root, listed, base):
+    """Does one word of a command name a protected path? Relative words that look like paths are read against
+    `base` (the session folder unless an earlier `cd` moved it). base "?" means unknown."""
     w = word.strip("\"'()<>=")
     if not w:
         return None
-    if re.match(r"^(\./)?data(/|$)", w):
-        if base == "?":
+    if not re.match(r"^([a-z]:)?/", w):
+        if base == "?" or not re.match(r"^(\.\.?(/|$)|data(/|$)|[^\s/-][^\s]*/)", w):
             return None
-        w = (base or norm(str(root)).rstrip("/")) + "/" + re.sub(r"^\./", "", w)
-    elif not re.match(r"^([a-z]:)?/", w):
-        return None
+        w = base + "/" + w
     return protected_file(w, root, listed)
 
 
-def after_cd(words, base, root):
+def after_cd(words, base):
     """The folder after a `cd` segment: absolute targets replace it, relative ones add to it, and a
     target that holds a variable, ~ or a command substitution makes it unknown ("?")."""
     target = words[1].strip("\"'") if len(words) > 1 else ""
@@ -110,7 +121,7 @@ def after_cd(words, base, root):
         return "?"
     if re.match(r"^([a-z]:)?/", target):
         return posixpath.normpath(target)
-    return posixpath.normpath((base or norm(str(root)).rstrip("/")) + "/" + target)
+    return posixpath.normpath(base + "/" + target)
 
 
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n)(.*?)(\n[ \t]*\3[ \t]*(?:\n|$))", re.S)
@@ -121,12 +132,12 @@ def strip_heredocs(text):
     return HEREDOC.sub(lambda m: m.group(1) + m.group(5), text)
 
 
-def bash_problem(command, root, listed):
-    base = None
+def bash_problem(command, root, cwd, listed):
+    base = norm(str(cwd)).rstrip("/")
     for seg in SEGMENTS.split(strip_heredocs(norm(command))):
         words = seg.split()
         if words and words[0] == "cd":
-            base = after_cd(words, base, root)
+            base = after_cd(words, base)
             continue
         if not re.search(r"[\"']", seg):  # a comment ends the segment (not judged where quotes are used)
             words = re.sub(r"(^|\s)#.*$", "", seg).split()
@@ -156,16 +167,18 @@ def main():
             return 0
         call = json.load(sys.stdin)
         tool, args = call.get("tool_name"), call.get("tool_input", {})
-        root = Path(call.get("cwd") or ".")
+        cwd = Path(call.get("cwd") or ".")
+        project = project_root(cwd)
+        root = project or cwd
         global GUARD_DATA
-        GUARD_DATA = framework_project(root)
+        GUARD_DATA = project is not None
         listed = config_paths()
         why = None
         if tool in FILE_TOOLS and args.get(FILE_TOOLS[tool]):
             target = Path(args[FILE_TOOLS[tool]])
-            why = protected_file(target if target.is_absolute() else root / target, root, listed)
+            why = protected_file(target if target.is_absolute() else cwd / target, root, listed)
         elif tool in ("Bash", "PowerShell"):
-            why = bash_problem(args.get("command", ""), root, listed)
+            why = bash_problem(args.get("command", ""), root, cwd, listed)
         if not why:
             return 0
         print(f"Blocked: this call would change {why}. Input data and protected files are not edited: "

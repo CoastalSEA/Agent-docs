@@ -751,6 +751,14 @@ class HookPushCheck(Project):
         call = json.dumps({"tool_name": tool, "tool_input": {"command": command}, "cwd": str(cwd or self.root)})
         return subprocess.run([sys.executable, "-I", str(HOOK)], input=call, capture_output=True, text=True)
 
+    def test_a_push_from_a_subfolder_of_a_framework_project_is_checked(self):
+        self.times(work_age=10, handoff_age=100)
+        sub = self.root / "code" / "deep"
+        sub.mkdir(parents=True)
+        self.assertEqual(self.hook("git push", cwd=sub).returncode, 2)
+        (self.root / "CLAUDE.md").write_text("# CLAUDE.md" + NL + "Rules of another kind." + NL, encoding="utf-8")
+        self.assertEqual(self.hook("git push", cwd=sub).returncode, 0)
+
     def test_stale_handoff_blocks_a_push(self):
         self.times(work_age=10, handoff_age=100)
         r = self.hook("git push origin main")
@@ -810,6 +818,28 @@ class HookGuard(Project):
             self.assertFalse(self.blocked("Write", file_path=target), text)
             self.assertFalse(self.blocked("Bash", command="rm data/a.csv"), text)
             self.assertFalse(self.blocked("Bash", command="npm run build > data/build.log"), text)
+
+    def test_data_is_guarded_in_a_session_started_in_a_subfolder(self):
+        sub = self.root / "code" / "deep"
+        sub.mkdir(parents=True)
+        data = self.root / "data" / "a.csv"
+        self.assertTrue(self.hook("Write", cwd=sub, file_path=str(data)).returncode == 2)
+        self.assertTrue(self.hook("Write", cwd=sub, file_path="../../data/a.csv").returncode == 2)
+        for cmd in ("echo x > ../../data/a.csv", "rm ../../data/a.csv", "cp x.csv ../../data/a.csv",
+                    f"rm {data.as_posix()}", "cd ../.. && rm data/a.csv", "cd ../../data && rm ./a.csv"):
+            self.assertEqual(self.hook("Bash", cwd=sub, command=cmd).returncode, 2, cmd)
+
+    def test_relative_paths_are_read_against_the_session_folder(self):
+        sub = self.root / "code"
+        sub.mkdir()
+        self.assertFalse(self.hook("Write", cwd=sub, file_path="data/x.csv").returncode == 2)  # code/data
+        for cmd in ("rm data/a.csv", "echo x > data/a.csv", "rm ../outputs/data/a.csv", "cat ../data/a.csv"):
+            self.assertEqual(self.hook("Bash", cwd=sub, command=cmd).returncode, 0, cmd)
+
+    def test_a_folder_above_the_session_folder_without_the_marker_is_not_a_project(self):
+        plain = Path(self.tmp.name) / "plain" / "sub"
+        plain.mkdir(parents=True)
+        self.assertEqual(self.hook("Write", cwd=plain, file_path=str(plain.parent / "data" / "a.csv")).returncode, 0)
 
     def test_listed_paths_are_protected_outside_a_framework_project(self):
         (self.root / "CLAUDE.md").unlink()

@@ -212,6 +212,14 @@ class AnalysisAdversaryFixture(Base):
         entry["message"]["content"][0]["input"]["command"] = "cat code/fit_decay.py"
         (logs / "s.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
         self.assertTrue(self.results()[self.fx.checks_listed[4]])
+        for command in ("python code/refit_decay.py", "python outputs/t/code/refit_decay.py", "python my-fit_decay.py"):
+            entry["message"]["content"][0]["input"]["command"] = command
+            (logs / "s.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+            self.assertTrue(self.results()[self.fx.checks_listed[4]], command)
+        for command in ("python3 -I fit_decay.py", "python C:/work/code/fit_decay.py"):
+            entry["message"]["content"][0]["input"]["command"] = command
+            (logs / "s.jsonl").write_text(json.dumps(entry) + "\n", encoding="utf-8")
+            self.assertFalse(self.results()[self.fx.checks_listed[4]], command)
 
 
 def make_docx(path, paragraphs_xml):

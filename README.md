@@ -9,7 +9,7 @@ into your Claude configuration folder, and two small local files (`machine.md`, 
 hold what differs from one user to the next.
 
 Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux with Python 3.12 (the
-CI workflow) and on Windows with Python 3.14; older versions are not tested. Three of the six skills need
+CI workflow), on Windows with Python 3.14 and on Linux with Python 3.13; older versions are not tested. Three of the six skills need
 more than that (Word, EndNote or search connectors): see `skills/README.md`. Licensed under
 the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below. To set up a project,
 see Starting a project, which is in that section. To contribute, see `CONTRIBUTING.md`.
@@ -281,7 +281,12 @@ configuration.
 ### Notes
 
 - The scripts and tests pass on Windows, macOS and Linux (the workflow in `.github/workflows/tests.yml`). The
-  interactive parts have only been used on Windows: skills, the status line, the EndNote server and the machine files.
+  interactive parts (skills, hooks, the status line, the EndNote server and the machine files) have been used on Windows. A clean
+  install on Ubuntu 24.04 (Python 3.13) passed the unit tests, `deploy.py init`, `apply`, `doctor` and `hooks`, a session that quotes both
+  marker lines, the data guard in a session started at the project root, and the `analysis-adversary` fixture (5 of 6 checks; the sixth
+  is a false failure in the check). That test found that the data guard did not cover a session started in a subfolder of the project;
+  the hooks now find the project root from the session folder upwards (unit tests only, not yet a live session). macOS has been
+  tested by CI only.
 - After a Claude Code update or a skill sync, the `proofread` summary and `deploy.py doctor` warn if the `docx` skill scripts it uses have changed. Re-run `python tests/skills/run_fixtures.py proofread proofread-structure` (see `tests/skills/README.md`), then `check_docx_skill.py --accept` (see `scripts/README.md`).
 - A skill edited in a session does not take effect until a new session starts.
 - Permission modes. The rules and settings here use ask and deny rules only, which apply in every mode. The skills work in
