@@ -57,7 +57,7 @@ there — a report's own "most consequential choice" section is about what
 most changes the *number*, not necessarily what most changes whether the
 *conclusion* is trustworthy.
 
-## What triage means here
+## Method
 
 **Granularity.** Follow the adversarial report's own section/finding
 structure as the default unit of triage — don't invent a finer or coarser
@@ -92,7 +92,26 @@ For each actual issue the adversarial report raises, separately:
    plus an undisclosed sensitivity to a nearby parameter choice); say so
    rather than triaging every finding in isolation.
 
-## Deliverable
+## Out of scope
+
+- Performing the reanalysis itself — that's a separate, later step, using
+  the task brief this one drafts.
+- Adding the recommended caveat to the source report directly — drafted
+  here, added by the author.
+- Raising the accuracy of the data as a finding, when the adversarial
+  report says the data was taken as given by instruction. Note that
+  statement in the summary, treat data accuracy as not assessed, and do
+  not triage it. A mismatch the report states as a fact (for example a row
+  order or unit that differs from DATA-NOTES.md) is still triaged like any
+  other finding.
+- Re-running or re-deriving the adversarial report's own computations —
+  that's `analysis-adversary`'s job, already done, and this step doesn't
+  redo the reproduction, the alternative-specification sweep, or the
+  provenance trace.
+
+**Not out of scope, and confirmed to matter**: checking an adversarial finding's *characterization* against a directly relevant primary source already in the project (a theory/method document the task itself cites) when materiality turns on characterization accuracy. This is a narrow, targeted check against a specific named source, not a re-audit of computations. If resolving a characterization question requires redoing analysis rather than reading a document, that need itself becomes a "further investigation" finding.
+
+## Output
 
 Save to `<project-root>\outputs\reanalysis-triage-<DDMMYY>-run<N>\
 reanalysis-triage-report.md`, where `<project-root>` is the cwd this was
@@ -113,7 +132,7 @@ returned as text and checks it against the saved outputs before relying on it.
 3. **If reanalysis is warranted for one or more findings**: a drafted
    task brief for that reanalysis (same convention as
    `prompts/blank-prompt-template.md`) — Task, Context, Inputs, Neutral framing,
-   Acceptance criteria, Out of scope, Definition of done — ready to hand
+   Method (optional), Out of scope, Output, Acceptance criteria — ready to hand
    to whoever will actually run it. **Drafted, not run** — this step
    prepares the next step, it doesn't perform it.
 4. **If a caveat is warranted for one or more findings**: the exact
@@ -137,30 +156,4 @@ returned as text and checks it against the saved outputs before relying on it.
   something should happen.
 - Nothing in the source report, the adversarial report, or the underlying
   analysis is edited, and no analysis script is executed.
-
-## Out of scope
-
-- Performing the reanalysis itself — that's a separate, later step, using
-  the task brief this one drafts.
-- Adding the recommended caveat to the source report directly — drafted
-  here, added by the author.
-- Raising the accuracy of the data as a finding, when the adversarial
-  report says the data was taken as given by instruction. Note that
-  statement in the summary, treat data accuracy as not assessed, and do
-  not triage it. A mismatch the report states as a fact (for example a row
-  order or unit that differs from DATA-NOTES.md) is still triaged like any
-  other finding.
-- Re-running or re-deriving the adversarial report's own computations —
-  that's `analysis-adversary`'s job, already done, and this step doesn't
-  redo the reproduction, the alternative-specification sweep, or the
-  provenance trace.
-
-**Not out of scope, and confirmed to matter**: checking an adversarial finding's *characterization* against a directly relevant primary source already in the project (a theory/method document the task itself cites) when materiality turns on characterization accuracy. This is a narrow, targeted check against a specific named source, not a re-audit of computations. If resolving a characterization question requires redoing analysis rather than reading a document, that need itself becomes a "further investigation" finding.
-
-## Definition of done
-
-Ran end to end, output on disk at the stated path (saved by the lead if it was
-returned as text), and a short summary of
-the overall recommendation — plus anywhere you were genuinely unsure
-whether a finding was material, flagged as such rather than resolved by
-guessing.
+- Ran end to end, output on disk at the stated path (saved by the lead if it was returned as text), with a short summary of the overall recommendation, plus anywhere you were genuinely unsure whether a finding was material, flagged as such rather than resolved by guessing.

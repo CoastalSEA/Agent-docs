@@ -36,7 +36,7 @@ model: <sonnet | opus | haiku | inherit>
 
 ## Part 2: task the subagent
 
-Write the task with the sections in `prompts/blank-prompt-template.md` (Task, Context, Inputs, Neutral framing, Acceptance criteria, Out of scope, Definition of done). Then:
+Write the task with the sections in `prompts/blank-prompt-template.md` (Task, Context, Inputs, Neutral framing, Method (optional), Out of scope, Output, Acceptance criteria). Then:
 
 - Pass the scope in the task text. The agent does not know what you were discussing.
 - Include the instructions from the Subagents section of the global `CLAUDE.md` in the prompt.

@@ -300,4 +300,4 @@ configuration.
 
 ## Acknowledgement
 
-The starting point for many of the ideas contained in this repo, especially the structure of prompts, skills and hooks are adapted from the excellent course entitled "AI Agent-Driven Research Workflows", organised by AI Horizons.
+The starting point for many of the ideas contained in this repo, have evolved from the introduction to AI, provided by the course entitled "AI Agent-Driven Research Workflows" and organised by AI Horizons.

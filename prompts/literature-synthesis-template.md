@@ -40,7 +40,18 @@ already exists. Point at documents rather than summarizing them.]
   own literature discovery — that's `literature-search`'s job, not this
   task's.
 
-## Reading full text
+## Neutral framing
+
+State the research question exactly as given, never rephrased toward a
+hoped-for conclusion. If the person filling in this brief already has a
+hypothesis, name it explicitly as *their* hypothesis to test — not as the
+question itself — so the agent isn't nudged toward confirming it.
+
+[The actual question goes here, verbatim.]
+
+## Method
+
+**Reading full text.**
 
 For each candidate with a DOI/URL, in this order:
 
@@ -51,16 +62,7 @@ For each candidate with a DOI/URL, in this order:
 
 Confirm full-text fetching once per run (same gate pattern as `citation-check` and `literature-search`), unless the filled brief pre-authorized it.
 
-## Neutral framing
-
-State the research question exactly as given, never rephrased toward a
-hoped-for conclusion. If the person filling in this brief already has a
-hypothesis, name it explicitly as *their* hypothesis to test — not as the
-question itself — so the agent isn't nudged toward confirming it.
-
-[The actual question goes here, verbatim.]
-
-## What "reasoning openly" means here
+**Reasoning.**
 
 - Identify the distinct mechanisms/explanations each source proposes, not
   just its topic.
@@ -82,6 +84,25 @@ question itself — so the agent isn't nudged toward confirming it.
   under different names, say so rather than silently merging or silently
   treating them as unrelated.
 
+## Out of scope
+
+- Literature discovery — `literature-search`'s job. If the given evidence
+  set looks obviously incomplete for the question, say so in the output
+  rather than silently going and searching for more.
+- Citation/source verification — `citation-check`'s job.
+- Editing an existing manuscript in place — if extending a draft, output
+  goes to a new file or a clearly separated new section, never overwriting
+  the original silently.
+
+## Output
+
+**Handback.** The Write tool can refuse a report-type `.md` file from a subagent (server-side rule: names beginning report,
+summary, findings or analysis; no opt-out). Try to save the deliverable at the path given. If the Write is refused, do not
+work around it (no Bash or script write, and no renaming to get past the check). Return the complete, unshortened text in
+the final message under the heading `FILE: <that path>`, and say which file this applies to. Do not say a file was refused
+unless you attempted to write it. Save any data files, tables, figures and scripts yourself. The lead saves any file that was
+returned as text and checks it against the saved outputs before relying on it.
+
 ## Acceptance criteria
 
 - [ ] Every claim in the output traces to a specific source (title/author/
@@ -97,30 +118,4 @@ question itself — so the agent isn't nudged toward confirming it.
 - [ ] Output saved at `<project-root>\outputs\literature-synthesis-
       <DDMMYY>-run<N>\`, per this project's standard convention (by the
       agent, or by the lead from text returned under `FILE:`; see Handback).
-
-## Handback
-
-**Handback.** The Write tool can refuse a report-type `.md` file from a subagent (server-side rule: names beginning report,
-summary, findings or analysis; no opt-out). Try to save the deliverable at the path given. If the Write is refused, do not
-work around it (no Bash or script write, and no renaming to get past the check). Return the complete, unshortened text in
-the final message under the heading `FILE: <that path>`, and say which file this applies to. Do not say a file was refused
-unless you attempted to write it. Save any data files, tables, figures and scripts yourself. The lead saves any file that was
-returned as text and checks it against the saved outputs before relying on it.
-
-## Out of scope
-
-- Literature discovery — `literature-search`'s job. If the given evidence
-  set looks obviously incomplete for the question, say so in the output
-  rather than silently going and searching for more.
-- Citation/source verification — `citation-check`'s job.
-- Editing an existing manuscript in place — if extending a draft, output
-  goes to a new file or a clearly separated new section, never overwriting
-  the original silently.
-
-## Definition of done
-
-Ran end to end, output on disk at the stated path (saved by the lead if it was
-returned as text), and a short summary of
-what surprised you — especially any claim you couldn't source, any source
-you couldn't get full text for, and any place the sources actively
-disagreed.
+- Ran end to end, output on disk at the stated path (saved by the lead if it was returned as text), with a short summary of what surprised you, especially any claim you couldn't source, any source you couldn't get full text for, and any place the sources actively disagreed.
