@@ -14,6 +14,13 @@ Changed: 2026-09-27. get_reference and search_references now return EndNote's
          exactly as stored. Created using: claude-opus-5-5-v5.5-date: 270926
 Changed: 2026-11-08. ENDNOTE_LIBRARY_PATH is required; the built-in default path
          was removed. Created using: claude-sonnet-5-5-v5.5-date: 081126
+Changed: 2026-11-21. Entries in the trash are left out unless include_trash is set;
+         search_references takes an exact keyword filter; get_reference returns the
+         entry type name and the linked files; search_by_file_name finds entries by
+         the name of a linked file; read_linked_file_text takes a page range and says
+         when a PDF has no text layer. One registration serves one library: a project
+         library is served by a second registration (see README.md).
+         Created using: claude-opus-5-5-v5.5-date: 211126
 
 Every database connection opens the .enl file with SQLite's mode=ro URI flag,
 so a write attempt fails at the driver level rather than relying on this code
@@ -50,6 +57,11 @@ REF_FIELDS = [
 REF_COLUMNS = {"doi": "electronic_resource_number"}
 REF_FIELDS.append("doi")
 
+# Entry type names for the internal integers, as observed in a project library of EndNote 20 on 211126
+# (one entry of each kind checked). The integers differ from those of EndNote XML export. Other integers
+# are returned without a name.
+TYPE_NAMES = {0: "Journal Article", 1: "Book", 2: "Thesis", 7: "Book Section", 10: "Report"}
+
 mcp = MCPServer("endnote")
 
 
@@ -69,8 +81,9 @@ def _ro_connect(path: str) -> sqlite3.Connection:
             con.close()
         raise LibraryLockedError(
             f"Cannot open the EndNote library at '{path}': {exc}. This library is "
-            "most likely open in the EndNote application, which holds an exclusive "
-            "lock on the file while it is open. Close the library in EndNote, then retry."
+            "most likely open in the EndNote application, which locks the file of each "
+            "open library (the lock is per library: other libraries stay readable). A "
+            "library open in EndNote cannot be read. Close it in EndNote, then retry."
         ) from exc
     return con
 
@@ -79,9 +92,16 @@ def _pdf_root(library_path: str) -> Path:
     return Path(library_path).with_suffix(".Data") / "PDF"
 
 
+def _keywords(value: str) -> list[str]:
+    return [k.strip() for k in (value or "").split("\r") if k.strip()]
+
+
 @mcp.tool()
-def search_references(query: str, limit: int = 20) -> list[dict]:
-    """Search title, author, abstract, and keywords for a substring. Read-only."""
+def search_references(query: str = "", limit: int = 20, keyword: str = "",
+                      include_trash: bool = False) -> list[dict]:
+    """Search title, author, abstract, and keywords for a substring. keyword keeps only entries
+    holding that exact keyword (for example read:full). Entries in the trash are left out unless
+    include_trash is set. Read-only."""
     try:
         con = _ro_connect(LIBRARY_PATH)
     except LibraryLockedError as exc:
@@ -89,13 +109,43 @@ def search_references(query: str, limit: int = 20) -> list[dict]:
     try:
         cur = con.cursor()
         like = f"%{query}%"
+        trash = "" if include_trash else "trash_state = 0 and "
         cur.execute(
             "select id, author, year, title, substr(abstract, 1, 300) as abstract_preview, url, "
-            "electronic_resource_number as doi "
-            "from refs where title like ? or author like ? or abstract like ? or keywords like ? "
-            "order by year desc limit ?",
-            (like, like, like, like, limit),
+            "electronic_resource_number as doi, keywords, trash_state "
+            f"from refs where {trash}(title like ? or author like ? or abstract like ? or keywords like ?) "
+            "order by year desc",
+            (like, like, like, like),
         )
+        cols = [d[0] for d in cur.description]
+        out = []
+        for row in cur.fetchall():
+            rec = dict(zip(cols, row))
+            if keyword and keyword.strip() not in _keywords(rec["keywords"]):
+                continue
+            rec.pop("keywords")
+            if not include_trash:
+                rec.pop("trash_state")
+            out.append(rec)
+            if len(out) >= limit:
+                break
+        return out
+    finally:
+        con.close()
+
+
+@mcp.tool()
+def search_by_file_name(name: str, limit: int = 20, include_trash: bool = False) -> list[dict]:
+    """Find entries whose linked file path contains name (older notes cite papers by file name). Read-only."""
+    try:
+        con = _ro_connect(LIBRARY_PATH)
+    except LibraryLockedError as exc:
+        return [{"error": str(exc)}]
+    try:
+        trash = "" if include_trash else "and r.trash_state = 0 "
+        cur = con.execute(
+            "select r.id, r.author, r.year, r.title, f.file_path from refs r join file_res f on f.refs_id = r.id "
+            f"where f.file_path like ? {trash}order by r.id limit ?", (f"%{name}%", limit))
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
@@ -112,13 +162,20 @@ def get_reference(ref_id: int) -> dict:
     try:
         cur = con.cursor()
         cols = ",".join(f"{REF_COLUMNS[f]} as {f}" if f in REF_COLUMNS else f for f in REF_FIELDS)
-        cur.execute(f"select {cols} from refs where id = ?", (ref_id,))
+        cur.execute(f"select {cols}, trash_state from refs where id = ?", (ref_id,))
         row = cur.fetchone()
         if row is None:
             return {"error": f"no reference with id {ref_id}"}
-        return dict(zip(REF_FIELDS, row))
+        rec = dict(zip(REF_FIELDS + ["trash_state"], row))
+        rec["in_trash"] = bool(rec.pop("trash_state"))
+        rec["reference_type_name"] = TYPE_NAMES.get(rec["reference_type"])
     finally:
         con.close()
+    try:
+        rec["files"] = [f["file_path"] for f in _list_linked_files(ref_id)]
+    except LibraryLockedError as exc:
+        rec["files"] = {"error": str(exc)}
+    return rec
 
 
 def _list_linked_files(ref_id: int) -> list[dict]:
@@ -154,8 +211,10 @@ def list_linked_files(ref_id: int) -> list[dict]:
 
 
 @mcp.tool()
-def read_linked_file_text(ref_id: int, file_index: int = 0, max_chars: int = 20000) -> dict:
-    """Extract text from one of a reference's linked files (e.g. a PDF), read-only."""
+def read_linked_file_text(ref_id: int, file_index: int = 0, max_chars: int = 20000,
+                          first_page: int = 1, last_page: int = 0) -> dict:
+    """Extract text from one of a reference's linked files (e.g. a PDF), read-only.
+    first_page and last_page (1-based, 0 for the last page) limit the pages read from a PDF."""
     try:
         files = _list_linked_files(ref_id)
     except LibraryLockedError as exc:
@@ -171,7 +230,13 @@ def read_linked_file_text(ref_id: int, file_index: int = 0, max_chars: int = 200
     if path.lower().endswith(".pdf"):
         from pypdf import PdfReader
         reader = PdfReader(path)
-        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        pages = reader.pages[max(first_page, 1) - 1:(last_page or len(reader.pages))]
+        text = "\n".join((page.extract_text() or "") for page in pages)
+        if not text.strip():
+            return {"file_path": target["file_path"], "text": "", "truncated": False, "pages": len(reader.pages),
+                    "no_text_layer": True,
+                    "message": "The PDF has no text layer in the pages read (probably a scan). Use the OCR "
+                               "step of the library-metadata skill; this server does no OCR."}
     else:
         text = Path(path).read_text(errors="replace")
     return {

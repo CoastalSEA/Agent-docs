@@ -29,6 +29,7 @@ Source references from the database: return bibliographic records, abstracts, an
 - No write, update, insert, or delete against either database file (`<test library>.enl` or the files in `<test library>.Data\sdb\`).
 - No move, rename, delete, or content edit of a linked file. A linked file is opened for reading only, and the handle is closed without modification.
 - No writing back into the EndNote library from this server under any circumstance, including tagging, rating, or note fields.
+- Per kind of library (211126): the server is read only for every library it serves. An independent library (for example a personal one) is never written by anything. A project library under `sources/references/` of a project is served read only by a second registration (`endnote-project`, local scope) and written only through `scripts/endnote_lib.py`, which is not part of this server.
 
 Enforcement, not just policy: every database connection must open the `.enl` file with the SQLite URI flag `mode=ro` (for example `file:<path>?mode=ro` in Python's `sqlite3`, `uri=True`). This makes a write attempt fail at the driver level rather than relying on the server's own code to never issue one. Do not open the file in the default read-write mode and rely on the tool layer to avoid writing.
 

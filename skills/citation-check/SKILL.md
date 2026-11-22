@@ -7,7 +7,7 @@ description: Verify every in-text citation in a Word manuscript that uses EndNot
 
 This skill checks the citations in a Word (`.docx`) manuscript that uses EndNote cite-while-write (CWYW) field codes. It never edits the manuscript, the EndNote library, or any bibliography entry: it only flags. Where a check cannot be completed (no source text, no DOI, ambiguous match), it reports that plainly and does not guess.
 
-The manuscript is supplied input data (a hard boundary on this machine): open it read-only. Read the EndNote library only through the `mcp__endnote__*` tools, which are read-only by construction. This skill requires that MCP to be connected; if it is not, stop and say so. Do not parse the library file directly.
+The manuscript is supplied input data (a hard boundary on this machine): open it read-only. Read the EndNote library only through the `mcp__endnote__*` tools, which are read-only by construction. This skill requires that MCP to be connected; if it is not, stop and say so. Do not parse the library file directly. If the project `CLAUDE.md` names a project library registration (`endnote-project`), use the `mcp__endnote-project__*` tools (same tool names after the prefix) for the project library in place of `mcp__endnote__*`; when a citation is not found there, also search `mcp__endnote__*` and report which library held it.
 
 ## Two stages
 

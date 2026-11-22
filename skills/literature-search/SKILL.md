@@ -26,7 +26,7 @@ Optional parameters:
 
 ## Local source: your EndNote library
 
-Run this first, always, whatever the result cap or narrowing flag. It is read-only, local and free (no network call, so it never needs the confirmation gate below). Skipping it would mean re-discovering externally what is already on hand.
+Run this first, always, whatever the result cap or narrowing flag. It is read-only, local and free (no network call, so it never needs the confirmation gate below). Skipping it would mean re-discovering externally what is already on hand. If the project `CLAUDE.md` names a project library registration (`endnote-project`), search the project library first with the `mcp__endnote-project__*` tools (same tool names after the prefix), then the independent library with `mcp__endnote__*`, and label each local hit with its library.
 
 **Search method: this is not like the other five sources.** `mcp__endnote__search_references` does **literal contiguous-substring matching** against title, author, abstract and keywords. It does not match words or rank by relevance. A full multi-clause derived query returns zero results even when relevant records exist, while a short real substring returns many. Do not send the combined derived-term query as one string. Instead:
 
