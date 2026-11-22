@@ -27,6 +27,7 @@ writing rules) is not here: it goes in the two local files made from the forms i
     `archive-<task>-<DDMMYY>` (INDEX status archived). `check_records` checks the record files and the memory notes against the
     project folders, including the size of `DECISIONS.md`. `wrapup_status` reports whether the handoff is current (exit code 1 if
     stale). `project.py` reports the template level in use and whether an upgrade is suggested (`status`), and adds the missing files of a level (`init --level`, a dry run until `--apply`). `rotate_records` moves the oldest decision rows beyond 100 to `records/DECISIONS-archive.md`; nothing is deleted.
+- `project-library-block.md`: the optional "Project library" block for a project that keeps its papers in a project EndNote library under `sources/references/`. `project.py init --library` appends it to the project `CLAUDE.md`.
 - `project-template-minimal/`: `CLAUDE.md` only, for a small task. It says what the project is and where the data and
   outputs go. The global file supplies the rules. No record files.
 - `project-template-handoff/`: `CLAUDE.md` and `records/HANDOFF.md`. The cheapest record. Use it when a project spans

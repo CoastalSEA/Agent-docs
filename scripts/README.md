@@ -27,6 +27,7 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `hook_confirm.py` | Claude Code hook: ask the user before reject, discard, archive or restore |
 | `log_retention.py` | Report session transcripts of a project that will be deleted soon; optional start-of-session notice |
 | `check_docx_skill.py` | Find the `docx` skill scripts that `proofread` uses, check their interface and warn when they change |
+| `endnote_lib.py` | Read and maintain a project EndNote library under `sources/references/` |
 
 ## run_control.py
 
@@ -108,12 +109,13 @@ Reports which project template level a project is at (minimal, handoff or full),
 
 ```
 <python> project.py status [--quiet] [--root <project root>]
-<python> project.py init --level minimal|handoff|full [--apply] --templates <claude-md folder> [--root <project root>]
+<python> project.py init --level minimal|handoff|full [--library] [--apply] --templates <claude-md folder> [--root <project root>]
 ```
 
 - `status` prints the level in use, the number of files in `data/` (not `DATA-NOTES.md` or README files), the number of runs (task folders and git tags that look like `<task>-<DDMMYY>-run<N>`), the number of notes in the Claude memory folder for the project, the recommended level and the files each level is missing. The last line is `Status: OK at <level>`, `Status: UPGRADE SUGGESTED to <level>` or `Status: NO TEMPLATE`; `--quiet` prints only that line. Nothing is written.
 - The recommendation: from minimal or handoff to full when `data/` holds 3 or more files or there are 5 or more runs; from minimal to handoff when the memory folder holds notes or there are earlier runs. The script cannot count a repeated check because an earlier result was not found, so the handoff template still names it.
 - `init` is a dry run unless `--apply` is given. It adds the files of the level that are missing, never overwrites a file, and appends the missing lines to `.gitignore` (the `sources/` line at least, in a git project). An existing `CLAUDE.md` that differs from the template is left as it is and named, so that it is merged by hand.
+- `--library` also appends the block in `claude-md/project-library-block.md` to `CLAUDE.md` (a project EndNote library under `sources/references/`), unless `CLAUDE.md` already has a `## Project library` heading. Fill in its brackets.
 - `--templates` is needed when the script is run from `~/.claude/scripts/`. It is optional when the script is run from the repository.
 - The memory folder is `~/.claude/projects/<project path with dashes>/memory/` (under `CLAUDE_CONFIG_DIR` if that is set).
 - Exit code 0 on success, 2 if the folder or the templates cannot be used.
@@ -184,3 +186,32 @@ The `proofread` skill edits Word files with scripts from the `docx` skill (`offi
 - Search order: the environment variable `DOCX_SKILL_DIR`, each `--search-dir`, `<claude dir>/skills/docx/scripts`, `<claude dir>/skills/synced/*/docx/scripts`, the plugin folders, and, for the default `~/.claude`, the Claude desktop app's skills-plugin folder.
 - Fingerprint: a hash of every `.py` file in the scripts folder. `--accept` records it in `<claude dir>/docx-skill.json` (only if the interface check passes). A later run that finds a different fingerprint prints a warning, and the exit code stays 0. When that happens, re-run the `proofread` fixtures (`python tests/skills/run_fixtures.py proofread proofread-structure`, about four minutes), and run `--accept` if they pass. The warning appears in the `proofread` summary, in `deploy.py doctor` and in the fixture runner, and each repeats this instruction.
 - `deploy.py doctor` and the fixture runner both show these rows as warnings.
+
+## endnote_lib.py
+
+Reads and maintains a project EndNote library: a library under `sources/references/` in the project root, which the project keeps as a project source. Every other library is read only: a write is refused unless the library lies inside `<root>/sources/references/`, and always refused for a path in `protected-paths.txt` (the file `hook_guard.py` reads). The EndNote MCP server stays read only; this helper is the only way to write.
+
+```
+<python> endnote_lib.py <command> --lib "sources/references/<name>.enl" [options] [--root <project root>]
+```
+
+| Command | What it does |
+|---|---|
+| `info` | Active entries, entries in the trash, the lock state and journal mode of both files, the check, and the number and size of backups |
+| `list [--keyword K]` | Active entries: id, year, first author, title. `K` is an exact keyword, for example `read:full` |
+| `types` | The entry type integers in use, with a count and one example title each. Use it to map type names to integers for a library |
+| `check` | Integrity of the tables the helper writes, in both files, and whether the two files agree |
+| `backup` | Copies the `.enl` file and `Data/sdb/` to `library-backups/<name>/<DDMMYY-HHMMSS>/` beside the library |
+| `restore <tag>` | Restores a backup; the present state is backed up first |
+| `update --json F` | `F` holds `{"<id>": {"<column>": value}}` |
+| `add --json F [--pdf P]` | `F` holds `{"<column>": value}`; the PDF is copied into `Data/PDF/<ten digits>/` |
+| `tag --csv F --prefixes P` | `F` has the columns `id` and `keywords` (separated by `; `); every keyword must start with a prefix in `P`, for example `read:,proj:`. Keywords already present are kept |
+
+- Write commands take `--source TEXT` (logged with each change), `--log FOLDER` (appends each change to `FOLDER/changes.csv`: time, library, action, entry, field, before, after, source) and `--allow-type N` (an entry type not yet in use in the library; give it only with evidence of its meaning).
+- Before each write the library must open for reading. EndNote locks the file while the library is open, so a locked library is refused with a message naming EndNote; stop and tell the user. There is no retry.
+- Each write makes a backup, then writes the `.enl` file and `Data/sdb/sdb.eni` in one transaction, with the integrity check before the commit. On a failure both files are rolled back, or restored from the backup if either differs from it, and a PDF folder made by the failed call is removed.
+- No command deletes an entry or a PDF, or writes `trash_state`. Editable columns are listed in `EDITABLE` in the script.
+- The term lists and the PDF index of EndNote are not updated: new authors, journals and keywords may not appear in the term lists until Library, Recover Library is run in EndNote. Searches are correct at once.
+- Backups are kept; `info` reports their total size.
+- The header of the script lists the facts about the EndNote 20 format that it depends on and the evidence for each.
+- Exit code 0 on success, 1 for a refused write, a locked library or a failed check, 2 for an unusable path or input.

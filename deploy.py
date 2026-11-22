@@ -396,7 +396,8 @@ def render_machine(f, scripts, repo, config, today=None):
              "oldest decision lines to the archive; `--apply` writes) and `project.py` (`status` reports the template level "
              "and whether an upgrade is suggested; `init --level minimal|handoff|full` is a dry run until `--apply`, and `--templates` "
              "names the `claude-md` folder of this repository). Use the Python and path forms of the "
-             "run control line, with the script name replaced. `check_docx_skill.py` takes no `--root`: `--find` prints the folder of the docx skill scripts that the proofread skill calls, and a plain run checks them."]
+             "run control line, with the script name replaced. `check_docx_skill.py` takes no `--root`: `--find` prints the folder of the docx skill scripts that the proofread skill calls, and a plain run checks them."
+             " `endnote_lib.py` reads and maintains a project EndNote library under `sources/references/` (`info`, `list`, `types`, `check`, `backup`, `restore`, `update`, `add`, `tag`; `--lib` names the `.enl` file; see the scripts README)."]
     for name, path, on_path, label in f["tools"]:
         where = "on `PATH`" if on_path else "not on `PATH`"
         if name == "MATLAB":

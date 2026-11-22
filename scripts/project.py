@@ -7,14 +7,16 @@ adds the data notes, the output index, the decision log, the products register a
 check in the minimal and handoff `CLAUDE.md` files calls `status` so that the counts are not made by hand.
 
 Usage: project.py status [--quiet] [--root <project root>]
-       project.py init --level minimal|handoff|full [--apply] [--templates <claude-md folder>] [--root <project root>]
+       project.py init --level minimal|handoff|full [--library] [--apply] [--templates <claude-md folder>] [--root <project root>]
        project.py --version
   --root may stand anywhere in the command line; the default is the current folder.
   status    prints the level in use, the counts (files in data/, runs, memory notes), the recommended level and the
             files each level is missing. --quiet prints only the last line. Nothing is written.
   init      is a dry run unless --apply is given. It adds the files of the level that are missing, never overwrites
             a file, and appends missing lines to `.gitignore`. An existing `CLAUDE.md` that differs from the template
-            is left as it is and named, so that it is merged by hand.
+            is left as it is and named, so that it is merged by hand. --library also appends the block in
+            `project-library-block.md` (a project EndNote library under `sources/references/`) to `CLAUDE.md`
+            when it has no "## Project library" heading; fill in its brackets.
   --templates   the `claude-md` folder of the Agent-docs repository. The default is the folder beside this script's
             parent, which exists when the script is run from the repository.
 Inputs:  the project folder, its git tags (if it is a git repository) and the Claude memory folder for the project.
@@ -30,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.1"
+VERSION = "1.2"
 LEVELS = ("minimal", "handoff", "full")
 LEVEL_FILES = {
     "minimal": ["CLAUDE.md"],
@@ -214,7 +216,11 @@ def template_files(templates, level):
             if p.is_file() and p.name != ".gitignore" and "__pycache__" not in p.parts and p.suffix != ".pyc"]
 
 
-def init(root, level, templates, apply):
+LIBRARY_BLOCK = "project-library-block.md"
+LIBRARY_HEADING = "## Project library"
+
+
+def init(root, level, templates, apply, library=False):
     if templates is None:
         print("The templates were not found. Give --templates <the claude-md folder of the Agent-docs repository>.",
               file=sys.stderr)
@@ -244,7 +250,16 @@ def init(root, level, templates, apply):
     for src, rel in differs:
         print(f"Exists and differs from the {level} template, left as it is; merge by hand: {rel.as_posix()} "
               f"(template: {src})")
-    if not add and not ignore:
+    claude, lib_block = root / "CLAUDE.md", templates / LIBRARY_BLOCK
+    if library and not lib_block.is_file():
+        print(f"No library block {lib_block}.", file=sys.stderr)
+        return 2
+    want_block = library and not (claude.is_file() and LIBRARY_HEADING in claude.read_text(encoding="utf-8"))
+    if library and not want_block:
+        print("Exists, left as it is: the Project library block in CLAUDE.md")
+    if want_block:
+        print(f"{verb} to CLAUDE.md: the Project library block (fill in its brackets)")
+    if not add and not ignore and not want_block:
         print("Nothing to add.")
     if apply:
         for src, dst, _ in add:
@@ -261,7 +276,11 @@ def init(root, level, templates, apply):
             with open(f, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text + ("" if not text or text.endswith("\n") else "\n") + ("\n" if text else "")
                          + "\n".join(block) + "\n")
-    elif add or ignore:
+        if want_block:
+            text = claude.read_text(encoding="utf-8")
+            with open(claude, "w", encoding="utf-8", newline="") as fh:
+                fh.write(text + ("" if text.endswith("\n") else "\n") + "\n" + lib_block.read_text(encoding="utf-8"))
+    elif add or ignore or want_block:
         print("Dry run: nothing written. Add --apply to write.")
     return 0
 
@@ -277,6 +296,7 @@ def main(argv):
     ini = sub.add_parser("init", help="add the missing files of a level (dry run unless --apply)")
     ini.add_argument("--level", required=True, choices=LEVELS)
     ini.add_argument("--apply", action="store_true", help="write the files")
+    ini.add_argument("--library", action="store_true", help="add the Project library block to CLAUDE.md")
     ini.add_argument("--templates", help="the claude-md folder of the Agent-docs repository")
     args = ap.parse_args(rest)
     root = Path(root_arg).resolve() if root_arg else Path.cwd().resolve()
@@ -286,7 +306,7 @@ def main(argv):
     templates = find_templates(args.templates)
     if args.command == "status":
         return status(root, templates, args.quiet)
-    return init(root, args.level, templates, args.apply)
+    return init(root, args.level, templates, args.apply, args.library)
 
 
 if __name__ == "__main__":

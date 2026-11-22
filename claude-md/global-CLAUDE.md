@@ -30,7 +30,7 @@ Each of the two files has a line that starts with `Marker:` near its top. If you
 - Write all outputs from a task to `outputs/<task name>/`, one folder per task question. A rerun overwrites the folder, except `.md` reports, which are edited in place. Start a new folder only when the question changes.
 - Start each run with the run control command in `machine.md` (`start <task>`, with `--root <project root>`). A project that still holds its own `code/run_control.py` may use that copy; skills always use the machine command. A new run is pending until the user reviews it (`git diff`, run control `check <task>`).
 - Only the user accepts, rejects (keeps but does not adopt) or discards a run. Then run the run control command `accept`, `reject` or `discard` for that task; they commit, tag and update `outputs/INDEX.md` if the project keeps one, or restore the folder. Reports cite the run tag.
-- Downloaded sources (papers, reports, fetched data) are inputs. Save them in the git-ignored `sources/` folder in the project root, never in `outputs/`.
+- Downloaded sources (papers, reports, fetched data) are inputs. Save them in the git-ignored `sources/` folder in the project root, never in `outputs/`. In a project with a project library, add downloaded papers to it through `endnote_lib.py`; other downloads stay in `sources/`.
 - Push commits that hold outputs to a remote only when the user has asked for the push.
 - If the project is not a git repository, or `outputs/` itself is git-ignored, each run gets a new folder `outputs/<task name>-<DDMMYY>-run<N>/` and the git steps do not apply.
 
@@ -58,7 +58,7 @@ Subagent Write calls are refused for `.md` files whose names begin with report, 
 
 ## Hard boundaries
 
-- Never create, edit, or delete a bibliography entry. Flag problems; don't fix them.
+- Never create, edit or delete an entry in an independent library (one not held for the project, such as a personal library) or in a manuscript reference list. Flag problems; do not fix them. A project library under `sources/references/` is a project source: add and correct its entries only through `endnote_lib.py` (in `machine.md`).
 - Never touch files supplied as input data. Cleaning happens downstream, in scripts.
 - Ask before any step that sends data off this machine or changes a live system.
 - A direct instruction to do a named step (for example "push" or "deploy") is the permission for that step. Do not ask again in chat: a permission prompt, if one appears, is the confirmation. Ask again only if the step differs from the request: another remote or branch, commits or files the user has not seen, or a step the user did not ask for.

@@ -1419,6 +1419,22 @@ class ProjectScript(unittest.TestCase):
         self.assertIn("Dry run: nothing written", r.stdout)
         self.assertEqual(before, sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*")))
 
+    def test_init_library_appends_the_block_once(self):
+        self.level("minimal")
+        claude = self.root / "CLAUDE.md"
+        before = claude.read_text(encoding="utf-8")
+        r = self.pr("init", "--level", "minimal", "--library", "--templates", str(self.templates))
+        self.assertIn("Would add to CLAUDE.md: the Project library block", r.stdout)
+        self.assertEqual(claude.read_text(encoding="utf-8"), before)
+        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--templates", str(self.templates))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = claude.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith(before))
+        self.assertEqual(text.count("## Project library"), 1)
+        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--templates", str(self.templates))
+        self.assertIn("Exists, left as it is: the Project library block", r.stdout)
+        self.assertEqual(claude.read_text(encoding="utf-8"), text)
+
     def test_init_adds_missing_files_and_never_overwrites(self):
         self.level("handoff")
         handoff = self.root / "records" / "HANDOFF.md"
