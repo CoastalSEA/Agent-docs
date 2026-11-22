@@ -9,7 +9,7 @@ into your Claude configuration folder, and two small local files (`machine.md`, 
 hold what differs from one user to the next.
 
 Requires Python 3 and git. The scripts and tests pass on Windows, macOS and Linux with Python 3.12 (the
-CI workflow), on Windows with Python 3.14 and on Linux with Python 3.13; older versions are not tested. Three of the six skills need
+CI workflow), on Windows with Python 3.14 and on Linux with Python 3.13; older versions are not tested. Four of the seven skills need
 more than that (Word, EndNote or search connectors): see `skills/README.md`. Licensed under
 the BSD 3-Clause licence (see `LICENSE`). To start, read the Deployment section below. To set up a project,
 see Starting a project, which is in that section. To contribute, see `CONTRIBUTING.md`.
@@ -231,6 +231,22 @@ file) and full (adds the data notes, the output index, the decision log and a `.
    the files that are missing and whether the folder is a git repository. If it is not, the model may offer to run
    `git init`, and you can answer yes. Without git, each run gets its own `outputs/<task>-<DDMMYY>-run<N>/` folder
    and the run control steps that tag and commit do not apply.
+
+#### A project EndNote library
+
+A project that gathers many papers can keep them in its own EndNote library under `sources/references/`. That library
+is a project source: the agent adds and corrects entries without asking, while every independent library (a personal
+one, for example) stays read only.
+
+1. **EndNote.** Create the library in `sources/references/` and move the project papers into it.
+2. **Terminal.** Add the "Project library" block to `CLAUDE.md` with `project.py init --level <level> --library --apply`
+   and fill in its brackets (the library name and a log folder).
+3. **Terminal.** Register the read-only server for the library at local scope as `endnote-project`
+   (`mcp/endnote/README.md`, section "Project library"), then start a new session.
+4. Writes go only through `scripts/endnote_lib.py` (`scripts/README.md`). It refuses any library outside
+   `sources/references/` and any protected path, refuses while EndNote has the library open, and backs up before each
+   write. The `library-metadata` skill finds verified metadata and adds papers through it. Run Library, Recover
+   Library in EndNote now and then: the helper does not update EndNote's term lists.
 
 ### Commands
 

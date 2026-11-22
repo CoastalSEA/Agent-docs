@@ -12,7 +12,7 @@ See `../prompts/new-skill-workflow.md` for the draft-refine-deploy process to ru
 
 ## What each skill needs
 
-`deploy.py apply` installs all six skills, except those named in `~/.claude/rules/skip-skills.txt` (one
+`deploy.py apply` installs all seven skills, except those named in `~/.claude/rules/skip-skills.txt` (one
 name per line, `#` for a comment). Every skill uses the Python and the run control command
 named in `machine.md`, except `proofread`, which uses the Python only. The table lists what else a skill needs. List a skill
 that you cannot use in that file before `apply`. A copy that is already installed is left alone: remove its
@@ -26,6 +26,7 @@ folder from `~/.claude/skills/` by hand.
 | `proofread` | Windows with Microsoft Word (driven from PowerShell), and the Anthropic `docx` skill (found by `check_docx_skill.py`; see `scripts/README.md`). | No. |
 | `citation-check` | The EndNote server (`mcp/endnote/`) connected, and a Word manuscript with EndNote cite-while-write fields. It stops if the server is not connected. | Yes, after it asks: CrossRef, Semantic Scholar, OpenAlex and arXiv. |
 | `literature-search` | The EndNote server for the local search. The Exa and Consensus connectors for those two sources. | Yes, after it asks: OpenAlex, arXiv, Semantic Scholar, Exa and Consensus. |
+| `library-metadata` | A project with a project EndNote library and the "Project library" block (`claude-md/project-library-block.md`), the `endnote-project` server registration, `scripts/endnote_lib.py`, and `pypdf` or `pymupdf` in the Python of `machine.md` for PDF text. Its OCR step needs the OCR environment and Tesseract named in `machine.md`. It has scripts in `library-metadata/scripts/`, which `deploy.py` installs with the skill; a script removed from the repository stays installed until its file is deleted by hand. | Yes, after it asks: OpenAlex, CrossRef and arXiv (titles read from PDFs, DOIs). |
 
 The interactive use of the skills has been on Windows only (see the Notes in the root README).
 
