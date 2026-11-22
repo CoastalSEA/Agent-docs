@@ -979,6 +979,15 @@ class LiteratureSearchFixture(Base):
         self.write(self.GOOD)
         self.assertFalse(self.results("Done.")[c[8]])
 
+    def test_an_unrelated_title_named_in_the_notes_is_not_a_candidate(self):
+        c = self.fx.checks_listed
+        sectioned = self.GOOD.replace("| Title | Local PDF |", "## Candidate list\n\n| Title | Local PDF |") + (
+            "\n## Notes and assumptions\n\nOpen Spatial Shoreline Data and Research was inspected and is not listed as a candidate.\n")
+        self.write(sectioned)
+        self.assertTrue(self.results()[c[3]], "a title named only in the notes")
+        self.write(sectioned.replace("| Serious game | no PDF linked |", "| Serious game | no PDF linked |\n| Synthesis Report on Tidal Change | none |"))
+        self.assertFalse(self.results()[c[3]], "a title in the candidate list")
+
     def test_an_external_call_or_a_changed_library_is_caught(self):
         self.write(self.GOOD)
         write_transcript(self.home, self.root, [tool_call("WebFetch", url="https://api.openalex.org/works?search=x")])
@@ -1345,6 +1354,11 @@ External verification was not done.
         self.assertTrue(self.results()[self.c[5]], "one row for each half is a verdict for each component")
         self.write(split.replace("| Supported | stated |", "| Contradicted | stated |"))
         self.assertFalse(self.results()[self.c[5]], "the second half is not Supported")
+        no_and = split.replace('"... and the peak occurred', '"the peak occurred')
+        self.write(no_and)
+        self.assertTrue(self.results()[self.c[5]], "the second half quoted without its leading 'and'")
+        self.write(no_and.replace("| Supported | stated |", "| Contradicted | stated |"))
+        self.assertFalse(self.results()[self.c[5]], "the second half without 'and' is not Supported")
         self.write(split)
         write_transcript(self.home, self.root, [
             tool_call("Skill", skill="citation-check", args="make no call to CrossRef, OpenAlex, arXiv, Unpaywall or https://x.example"),

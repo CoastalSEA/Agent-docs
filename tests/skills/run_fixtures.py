@@ -54,7 +54,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.4"
+VERSION = "1.5"
 REPO = Path(__file__).resolve().parents[2]
 CLAUDE_HOME = Path.home() / ".claude"
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -1427,6 +1427,12 @@ def verdict_line(lines, needle, verdict, exclude=None):
 NOT_SUPPORTED = r"(?<!not )(?<!un)supported"
 
 
+def candidate_section(text):
+    """The text under a 'Candidate ...' heading up to the next heading; the whole text when there is no such heading."""
+    m = re.search(r"^#+[ \t]*candidate[^\n]*\n(.*?)(?=^#+[ \t]|\Z)", text, re.I | re.M | re.S)
+    return m.group(1) if m else text
+
+
 # ---------------------------------------------------------------------------------------------------------
 class CitationCheckContext(SyntheticLibrary, Fixture):
     """Stage 2 (--context) against a generated library whose first record has a linked PDF of known text."""
@@ -1504,7 +1510,7 @@ class CitationCheckContext(SyntheticLibrary, Fixture):
         add(c[3], verdict_line(lines, r"towards the mouth|toward the mouth|the mouth of", r"contradict"))
         add(c[4], verdict_line(lines, r"bed sediment|fine sand", r"not located"))
         discharge = [ln for ln in lines if re.search(r"discharge", ln, re.I)]
-        second_half = [ln for ln in lines if re.search(r"and the peak occurred during spring tides", ln, re.I)]
+        second_half = [ln for ln in lines if re.search(r"(and )?the peak occurred during spring tides", ln, re.I)]
         add(c[5], verdict_line(discharge, r"discharge", r"contradict")
             and (verdict_line(discharge, r"discharge", NOT_SUPPORTED) or verdict_line(second_half, r"spring tides", NOT_SUPPORTED)),
             "needs a Contradicted verdict for the discharge component and a Supported one for the spring-tides component, "
@@ -1672,8 +1678,9 @@ class LiteratureSearch(SyntheticLibrary, Fixture):
         add(self.checks_listed[0], text is not None)
         add(self.checks_listed[1], re.search(r"derived|search terms", t, re.I) is not None and "theatre" in low)
         add(self.checks_listed[2], all(w in t for w in self.WANTED), f"missing: {[w for w in self.WANTED if w not in t]}")
-        add(self.checks_listed[3], not any(w in t for w in self.UNRELATED),
-            f"present: {[w for w in self.UNRELATED if w in t]}")
+        listed = candidate_section(t)  # the notes may name a record to say that it is not a candidate
+        add(self.checks_listed[3], not any(w in listed for w in self.UNRELATED),
+            f"present: {[w for w in self.UNRELATED if w in listed]}")
         add(self.checks_listed[4], re.search(r"no (local |linked )?pdf|not linked|none linked|no linked|pdf", low) is not None)
         add(self.checks_listed[5], re.search(r"(openalex|arxiv|semantic scholar|exa|consensus)[^\n]*"
                                               r"(not queried|not searched|not used|excluded|skipped|out of scope|not run|"
