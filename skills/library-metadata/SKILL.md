@@ -16,11 +16,11 @@ This skill maintains the project library named in the "Project library" block of
 
 ## Before sending anything off the machine
 
-Ask the user once per invocation, naming what is sent (titles read from PDFs, DOIs) and where (OpenAlex, CrossRef, arXiv). Without a yes, do only the local steps. The scripts send the OpenAlex key as described in `machine.md` and send no e-mail address.
+Ask the user once per invocation, naming what is sent (titles read from PDFs, DOIs) and where (arXiv, CrossRef, DataCite and OpenAlex). Without a yes, do only the local steps. The scripts send the OpenAlex key as described in `machine.md` and send no e-mail address.
 
 ## Tasks
 
-1. **Correct entries.** Run `lookup.py --lib "<library>" --out "<log folder>/<task>" --untitled` (or `--ids`). It writes `proposals.csv` and `proposals.json` and writes nothing to the library.
+1. **Correct entries.** Run `lookup.py --lib "<library>" --out "<log folder>/<task>" --untitled` (or `--ids`). It writes `proposals.csv` and `proposals.json` and writes nothing to the library. A DOI is looked up on arXiv (an arXiv DOI), CrossRef, DataCite and OpenAlex before the title search; each row names the services searched. Report the flags (an entry sharing its DOI with another active entry, a record found by title with a different DOI, a record type to set by hand) and the notes (a copy in the trash, an arXiv year that differs from the entry year) to the user; do not resolve them.
    - For an entry flagged because its file name or recorded title is wrong, read the first page with `mcp__endnote-project__read_linked_file_text` (`first_page=1`, `last_page=1`), put the printed title in a CSV with columns `id, query`, and run `lookup.py` again with `--queries`.
    - For an entry flagged for no text layer, run `ocr_pdf.py` with the interpreter of the OCR environment and the Tesseract path in `machine.md`, with the same `--out`, then run `lookup.py` again.
    - Run `apply.py --lib "<library>" --proposals "<log folder>/<task>" --types "<log folder>/entry_types.json" --log "<log folder>"`. It writes the verified entries only. Use `--overrides` only for values printed on the PDF itself, with that as the source.
@@ -31,7 +31,7 @@ Ask the user once per invocation, naming what is sent (titles read from PDFs, DO
 
 All files go in the log folder named in the block, under fixed names. Library changes are not run controlled.
 
-- `changes.csv`: every change written by the helper (entry, field, before, after, source).
+- `changes.csv`: every changed field written by the helper (entry, field, before, after, source), and one `check` row per entry handled by `apply.py` with its result (verified with the number of fields changed, or flagged with the reason).
 - `added.csv`: every row of an `add.py` list, with the new id or the reason it was not added.
 - `<task>/proposals.csv` and `<task>/proposals.json`, `<task>/ocr/`, and `entry_types.json`.
 

@@ -1,6 +1,6 @@
 r"""Read and maintain a project EndNote library under `sources/references/` of a project.
 
-Created using: $\text {Created using: }\ claude-opus-5-5-\text{v}5.5-\text {date: }211126$
+Created using: $\text {Created using: }\ claude-opus-5-5-\text{v}5.5-\text {date: }231126$
 
 A project library is a project source: agents add and correct its entries through this helper. Every other
 library (an independent library, such as a personal one) is never written: a write is refused unless the library
@@ -42,6 +42,9 @@ Rules kept by the code:
   must keep every keyword already there), trash_state is never written, a PDF is
   copied (never moved or overwritten). Keywords already present are kept; new ones are appended after a
   carriage return. An entry type must already be in use in the library unless allowed by name.
+- An update writes, stamps and logs only the values that differ from the library; an entry with no change is
+  not written, and an update with no change at all makes no backup. log_rows appends rows (for example a per-entry check result) to the log
+  without writing the library.
 
 Facts about the EndNote library format that this helper depends on, as used by EndNote 2025.4.1 (build 20759), the
 version on which they were observed (TESTED_ENDNOTE; another version may differ). Evidence: (F) the synthetic library
@@ -82,7 +85,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 TESTED_ENDNOTE = "EndNote 2025.4.1 (build 20759)"
 EDITABLE = ("reference_type", "author", "year", "title", "secondary_title", "volume", "number", "pages", "publisher",
             "electronic_resource_number", "url", "keywords", "abstract", "notes", "place_published", "date",
@@ -324,6 +327,12 @@ def _log(log_dir, enl, rows, source):
                         str(r["after"]).replace("\r", " | "), r.get("source") or source])
 
 
+def log_rows(log_dir, lib, rows, source=""):
+    """Append rows {action, id, field, before, after[, source]} to <log_dir>/changes.csv without writing the library
+    (for example one summary row per entry with the result of a check)."""
+    _log(log_dir, paths(lib)[0], rows, source)
+
+
 def _check_fields(fields, known_types, allow_types):
     bad = set(fields) - set(EDITABLE)
     if bad:
@@ -420,22 +429,29 @@ def update_refs(lib, root, updates, log_dir=None, source="", allow_types=()):
     known = _known_types(lib)
     for fields in updates.values():
         _check_fields(fields, known, allow_types)
+    current = {r["id"]: r for r in read_refs(lib, include_trash=True)}
+    for ref_id, fields in updates.items():
+        if ref_id not in current:
+            raise LibraryError(f"no entry {ref_id}")
+        if "keywords" in fields:
+            old = {k.strip() for k in keywords_of(current[ref_id]["keywords"])}
+            lost = sorted(old - {k.strip() for k in keywords_of(fields["keywords"])})
+            if lost:
+                raise LibraryError(f"an update may not remove keywords (entry {ref_id}: {lost}); the user edits "
+                                   "keywords in EndNote")
+    # only the values that differ are written, stamped and logged; an entry with no change is left alone
+    updates = {i: {k: v for k, v in f.items() if str(current[i][k]) != str(v)} for i, f in updates.items()}
+    updates = {i: f for i, f in updates.items() if f}
+    if not updates:
+        return []
 
     def work(c, s, now):
         rows = []
         for ref_id, fields in updates.items():
-            if not fields:
-                continue
             cols = list(fields)
             cur = c.execute(f"select {','.join(cols)} from {s}.refs where id=?", (ref_id,)).fetchone()
             if cur is None:
                 raise LibraryError(f"no entry {ref_id}")
-            if "keywords" in fields:
-                old = {k.strip() for k in keywords_of(cur[cols.index("keywords")])}
-                lost = sorted(old - {k.strip() for k in keywords_of(fields["keywords"])})
-                if lost:
-                    raise LibraryError(f"an update may not remove keywords (entry {ref_id}: {lost}); the user edits "
-                                       "keywords in EndNote")
             c.execute(f"update {s}.refs set {', '.join(k + '=?' for k in cols)}, record_last_updated=? where id=?",
                       list(fields.values()) + [now, ref_id])
             _stamp(c, s, ref_id)

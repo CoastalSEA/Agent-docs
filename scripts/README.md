@@ -212,6 +212,7 @@ Reads and maintains a project EndNote library: a library under `sources/referenc
 - Each write makes a backup, then writes the `.enl` file and `Data/sdb/sdb.eni` in one transaction, with the integrity check before the commit. On a failure both files are rolled back, or restored from the backup if either differs from it, and a PDF folder made by the failed call is removed.
 - No command deletes an entry or a PDF, or writes `trash_state`. Editable columns are listed in `EDITABLE` in the script.
 - The term lists and the PDF index of EndNote are not updated: new authors, journals and keywords may not appear in the term lists until Library, Recover Library is run in EndNote. Searches are correct at once.
+- An update writes, stamps and logs only the values that differ from the library; an update with no change at all makes no backup. `log_rows` (Python only) appends rows, such as a per-entry check result, to `changes.csv` without writing the library.
 - Backups are kept; `info` reports their total size.
 - The header of the script lists the facts about the EndNote 20 format that it depends on and the evidence for each.
 - Exit code 0 on success, 1 for a refused write, a locked library or a failed check, 2 for an unusable path or input.
