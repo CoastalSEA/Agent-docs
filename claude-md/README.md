@@ -21,12 +21,12 @@ writing rules) is not here: it goes in the two local files made from the forms i
     Merge it into the project's own `.gitignore`.
   - `products/PRODUCTS.md`: register of large generated files (over the file guard limit, videos, intermediates) held in the git-ignored `products/` folder. The `.gitignore` tracks only the register.
   - The scripts are not copied into projects. They live in `scripts/`; `deploy.py` installs them as `~/.claude/scripts/` and the
-    command form is in `machine.md`. Each has `--version`. `run_control` prepares `outputs/<task>/` (`start`), does the git steps and
+    command form is in `machine.md`. Each has `--version`. `run_control` prepares `outputs/<task>/`, or `outputs/<topic>/<task>/` when `outputs/TOPICS.md` sets the topic layout (`start`; `where`, `layout` and `topics` for the layout), does the git steps and
     `INDEX.md` lines (`accept`, `reject`, `discard`) and applies the file guard (`check`, `status`); its version is written to
     `run_info.txt` and the tag message. `archive_control` removes a task folder from `outputs/` and keeps it under the tag
     `archive-<task>-<DDMMYY>` (INDEX status archived). `check_records` checks the record files and the memory notes against the
     project folders, including the size of `DECISIONS.md`. `wrapup_status` reports whether the handoff is current (exit code 1 if
-    stale). `project.py` reports the template level in use and whether an upgrade is suggested (`status`), and adds the missing files of a level (`init --level`, a dry run until `--apply`). `rotate_records` moves the oldest decision rows beyond 100 to `records/DECISIONS-archive.md`; nothing is deleted.
+    stale). `project.py` reports the template level in use, the outputs layout and whether an upgrade is suggested (`status`), and adds the missing files of a level (`init --level`, a dry run until `--apply`; in a project with no runs `--apply` needs `--topics`, `--flat` or `--layout-later` and writes `outputs/TOPICS.md` at every level). The scripts share `outputs_layout.py`. `rotate_records` moves the oldest decision rows beyond 100 to `records/DECISIONS-archive.md`; nothing is deleted.
 - `project-library-block.md`: the optional "Project library" block for a project that keeps its papers in a project EndNote library under `sources/references/`. `project.py init --library` appends it to the project `CLAUDE.md`.
 - `project-template-minimal/`: `CLAUDE.md` only, for a small task. It says what the project is and where the data and
   outputs go. The global file supplies the rules. No record files.

@@ -27,12 +27,12 @@ Each of the two files has a line that starts with `Marker:` near its top. If you
 - When reporting coefficients of determination, $R^2$, include the p-value and the number of samples. If a model has more than one independent variable, include the adjusted $R^2$ estimate.
 
 ## Outputs
-- Write all outputs from a task to `outputs/<task name>/`, one folder per task question. A rerun overwrites the folder, except `.md` reports, which are edited in place. Start a new folder only when the question changes.
+- Write all outputs from a task to `outputs/<task name>/`, or `outputs/<topic>/<task name>/` in a project whose `outputs/TOPICS.md` sets the topic layout, one folder per task question. A rerun overwrites the folder, except `.md` reports, which are edited in place. Start a new folder only when the question changes.
 - Start each run with the run control command in `machine.md` (`start <task>`, with `--root <project root>`). A project that still holds its own `code/run_control.py` may use that copy; skills always use the machine command. A new run is pending until the user reviews it (`git diff`, run control `check <task>`).
 - Only the user accepts, rejects (keeps but does not adopt) or discards a run. Then run the run control command `accept`, `reject` or `discard` for that task; they commit, tag and update `outputs/INDEX.md` if the project keeps one, or restore the folder. Reports cite the run tag.
 - Downloaded sources (papers, reports, fetched data) are inputs. Save them in the git-ignored `sources/` folder in the project root, never in `outputs/`. In a project with a project library, add downloaded papers to it through `endnote_lib.py`; other downloads stay in `sources/`.
 - Push commits that hold outputs to a remote only when the user has asked for the push.
-- If the project is not a git repository, or `outputs/` itself is git-ignored, each run gets a new folder `outputs/<task name>-<DDMMYY>-run<N>/` and the git steps do not apply.
+- If the project is not a git repository, or `outputs/` itself is git-ignored, each run gets a new folder `outputs/<task name>-<DDMMYY>-run<N>/` (in its topic folder in a topic project) and the git steps do not apply.
 
 ## Methodological guardrails
 

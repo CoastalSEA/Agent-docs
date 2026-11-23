@@ -16,6 +16,9 @@ Commands (archive_control.py <command> ... [--root <project root>], --root anywh
         the status of the row back to current. Commit it when it is wanted again.
   list  print the archived tasks and their archive tags.
 A legacy row (a folder with no run tag, first cell the folder name) is handled in the same way.
+In a topic project (outputs/TOPICS.md, read through outputs_layout.py beside this script) the task folder is
+outputs/<topic>/<task>/ and its INDEX.md row names topic/task. The archive tag message records the relative
+folder, and restore reads it from there, not from the registry.
 
 Used with: outputs/INDEX.md, check_records.py (a path under an archived folder counts as existing).
 The master is scripts/archive_control.py in the Agent-docs repository; deploy.py installs it as ~/.claude/scripts/archive_control.py.
@@ -23,15 +26,20 @@ Version: see VERSION; it is written to the archive tag message.
 
 Created using: Claude Sonnet-v5.5-date: 131026
 Modified using: claude-sonnet-5-5-v5.5-date: 081126 (moved to scripts/; --root anywhere; version)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.1: topic layout through outputs_layout.py)
 """
 import argparse
 import datetime as dt
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
+import outputs_layout as ol  # noqa: E402
+
+VERSION = "1.1"
 
 
 def git(root, *args, check=True):
@@ -47,9 +55,21 @@ def rows(lines):
             yield i, [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def task_rows(lines, task):
-    t = f"`{task}`"
-    return [(i, c) for i, c in rows(lines) if len(c) == 5 and (c[1] == t or (c[1] == "" and c[0] == t))]
+def task_rows(lines, task, name=None):
+    """INDEX.md rows of a task; name is the second cell (outputs_layout.index_name), the task when flat."""
+    t, legacy = f"`{name or task}`", f"`{task}`"
+    return [(i, c) for i, c in rows(lines) if len(c) == 5 and (c[1] == t or (c[1] == "" and c[0] == legacy))]
+
+
+def task_folder(root, task):
+    """(folder, relative folder, INDEX.md name) of a task's present folder."""
+    try:
+        folder = ol.task_folder(root, task)
+    except ol.LayoutError as e:
+        raise SystemExit(str(e))
+    folder = folder or root / "outputs" / task
+    rel = folder.relative_to(root).as_posix()
+    return folder, rel, rel[len("outputs/"):]
 
 
 def write(path, lines):
@@ -62,37 +82,37 @@ def cmd_archive(root, tasks, message, commit):
     stamp = dt.date.today().strftime("%d%m%y")
     plan = []
     for task in tasks:
-        folder = root / "outputs" / task
+        folder, rel, name = task_folder(root, task)
         if not folder.is_dir():
             raise SystemExit(f"{folder} not found")
-        if git(root, "status", "--porcelain", "--", f"outputs/{task}").stdout.strip():
-            raise SystemExit(f"outputs/{task}/ has uncommitted changes: accept, reject or discard the run first")
-        if git(root, "status", "--porcelain", "--ignored", "--", f"outputs/{task}").stdout.strip():
-            raise SystemExit(f"outputs/{task}/ holds git-ignored files: move them out first")
-        cur = [(i, c) for i, c in task_rows(lines, task) if c[3] == "current"]
+        if git(root, "status", "--porcelain", "--", rel).stdout.strip():
+            raise SystemExit(f"{rel}/ has uncommitted changes: accept, reject or discard the run first")
+        if git(root, "status", "--porcelain", "--ignored", "--", rel).stdout.strip():
+            raise SystemExit(f"{rel}/ holds git-ignored files: move them out first")
+        cur = [(i, c) for i, c in task_rows(lines, task, name) if c[3] == "current"]
         if not cur:
             raise SystemExit(f"{task}: no INDEX.md row with status current")
         tag = f"archive-{task}-{stamp}"
         if git(root, "tag", "-l", tag).stdout.strip():
             raise SystemExit(f"tag {tag} exists")
-        plan.append((task, tag, cur))
-    for task, tag, cur in plan:
-        git(root, "tag", "-a", tag, "-m", f"Archive of outputs/{task}/. Restore with archive_control.py restore {task}.\n\nArchive control version: {VERSION}")
+        plan.append((task, tag, cur, rel))
+    for task, tag, cur, rel in plan:
+        git(root, "tag", "-a", tag, "-m", f"Archive of {rel}/. Restore with archive_control.py restore {task}.\n\nArchive control version: {VERSION}")
         for i, c in cur:
             c[3], c[4] = "archived", f"`{tag}`"
             lines[i] = "| " + " | ".join(c) + " |"
-        git(root, "rm", "-r", "-q", f"outputs/{task}")
-        if (root / "outputs" / task).exists():
-            shutil.rmtree(root / "outputs" / task)
+        git(root, "rm", "-r", "-q", rel)
+        if (root / rel).exists():
+            shutil.rmtree(root / rel)
     write(idx, lines)
-    paths = ["outputs/INDEX.md"] + [f"outputs/{t}" for t, _, _ in plan]
+    paths = ["outputs/INDEX.md"] + [rel for _, _, _, rel in plan]
     if commit:
-        msg = f"Archive {len(plan)} task folders: " + ", ".join(t for t, _, _ in plan)
+        msg = f"Archive {len(plan)} task folders: " + ", ".join(t for t, _, _, _ in plan)
         if message:
             msg += "\n\n" + message
         git(root, "add", "--", "outputs/INDEX.md")
         git(root, "commit", "-q", "-m", msg, "--", *paths)
-    print(f"Archived {len(plan)} folders: " + ", ".join(f"{t} ({tag})" for t, tag, _ in plan))
+    print(f"Archived {len(plan)} folders: " + ", ".join(f"{t} ({tag})" for t, tag, _, _ in plan))
 
 
 def cmd_restore(root, task):
@@ -101,15 +121,19 @@ def cmd_restore(root, task):
     tags = git(root, "tag", "-l", f"archive-{task}-*", "--sort=-creatordate").stdout.split()
     if not tags:
         raise SystemExit(f"no archive tag for {task}")
-    if (root / "outputs" / task).exists():
-        raise SystemExit(f"outputs/{task}/ already exists")
-    git(root, "checkout", tags[0], "--", f"outputs/{task}")
-    for i, c in task_rows(lines, task):
+    # The folder comes from the tag message that archive wrote, so a later change to TOPICS.md cannot move it.
+    text = git(root, "tag", "-l", "--format=%(contents)", tags[0]).stdout
+    m = re.search(r"^Archive of (outputs/\S+?)/?\. Restore", text, re.M)
+    rel = m.group(1) if m else f"outputs/{task}"
+    if (root / rel).exists():
+        raise SystemExit(f"{rel}/ already exists")
+    git(root, "checkout", tags[0], "--", rel)
+    for i, c in task_rows(lines, task, rel[len("outputs/"):]):
         if c[3] == "archived":
             c[3], c[4] = "current", ""
             lines[i] = "| " + " | ".join(c) + " |"
     write(idx, lines)
-    print(f"Restored outputs/{task}/ from {tags[0]} (staged, not committed); INDEX.md status set to current.")
+    print(f"Restored {rel}/ from {tags[0]} (staged, not committed); INDEX.md status set to current.")
 
 
 def cmd_list(root):

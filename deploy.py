@@ -386,18 +386,20 @@ def render_machine(f, scripts, repo, config, today=None):
                                               if win else "`/...`."),
              "", "## Commands", "",
              f"- Python: {forms(py)}. Plain `python` works: {f['plain_python']}. `pip` works: {f['pip']}.",
-             f"- Run control: {command('run_control.py')}. The commands are `start`, `path`, `check`, `accept`, "
-             "`reject`, `discard` and `status`. For `accept` and `reject` the question follows the task: "
+             f"- Run control: {command('run_control.py')}. The commands are `start`, `path`, `where`, `check`, "
+             "`accept`, `reject`, `discard`, `status`, `layout` and `topics`; in a project whose `outputs/TOPICS.md` "
+             "sets the topic layout, `start <topic>/<task>` or `--topic <topic>` places a new task, and `where <task>` "
+             "prints a task's folder. For `accept` and `reject` the question follows the task: "
              '`accept <task> "<question>"`.',
              "- Other project scripts, in the same folder with the same `--root` option: `archive_control.py` "
              "(`archive`, `restore`, `list`), `check_records.py` (the records check), `wrapup_status.py` "
              "(whether the handoff is current; exit code 1 if it is stale; `--quiet` prints only the status line), "
              "`rotate_records.py` (moves the "
              "oldest decision lines to the archive; `--apply` writes) and `project.py` (`status` reports the template level "
-             "and whether an upgrade is suggested; `init --level minimal|handoff|full` is a dry run until `--apply`, and `--templates` "
+             "and whether an upgrade is suggested; `init --level minimal|handoff|full` is a dry run until `--apply`, and in a project with no runs `--apply` needs `--topics`, `--flat` or `--layout-later`, and `--templates` "
              "names the `claude-md` folder of this repository). Use the Python and path forms of the "
              "run control line, with the script name replaced. `check_docx_skill.py` takes no `--root`: `--find` prints the folder of the docx skill scripts that the proofread skill calls, and a plain run checks them."
-             " `endnote_lib.py` reads and maintains a project EndNote library under `sources/references/` (`info`, `list`, `types`, `check`, `backup`, `restore`, `update`, `add`, `tag`; `--lib` names the `.enl` file; see the scripts README)."]
+             " `outputs_layout.py` is the shared module that reads `outputs/TOPICS.md` for these scripts; it is not run by hand. `endnote_lib.py` reads and maintains a project EndNote library under `sources/references/` (`info`, `list`, `types`, `check`, `backup`, `restore`, `update`, `add`, `tag`; `--lib` names the `.enl` file; see the scripts README)."]
     for name, path, on_path, label in f["tools"]:
         where = "on `PATH`" if on_path else "not on `PATH`"
         if name == "MATLAB":

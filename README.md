@@ -20,7 +20,7 @@ see Starting a project, which is in that section. To contribute, see `CONTRIBUTI
 CONTRIBUTING.md  how to report a problem or propose a change
 .github/    the CI workflow and the issue templates
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | statusline | doctor)
-scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
+scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), outputs_layout.py (the outputs layout module), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook (the hook scripts that are installed are in scripts/)
@@ -219,9 +219,18 @@ file) and full (adds the data notes, the output index, the decision log and a `.
 1. **Terminal, in the project folder.** Preview the files:
    `python <path>/scripts/project.py init --level minimal --templates <path>/claude-md`, where `<path>` is the full
    path of this repository (it is different on each machine, and a relative path does not work from the project
-   folder). This is a dry run and writes nothing.
-2. **Terminal.** Add `--apply` to write them. It adds only what is missing, never overwrites a file, and adds
-   the missing lines to `.gitignore`.
+   folder). This is a dry run and writes nothing. In a new project it also prints the outputs layout choice.
+2. **Terminal.** Add `--apply` and a layout option to write them. It adds only what is missing, never overwrites a
+   file, and adds the missing lines to `.gitignore`. The layout is chosen in two stages:
+   - Stage 1, now: `--topics` (run outputs in `outputs/<topic>/<task>/`; for a project with a plan that has phases
+     or work packages, or many runs expected), `--flat` (`outputs/<task>/`; a series of prompts with no plan) or
+     `--layout-later` (the first session asks before the first run). This writes `outputs/TOPICS.md`, and the
+     layout is fixed once the first run exists.
+   - Stage 2, in a topic project, when the plan is agreed: the model drafts the topics from its phases or work
+     packages, and adds them with `run_control.py topics add` once you agree the table. Until then runs go to the
+     default topic `general`.
+
+   A project that already has runs needs no layout option and stays flat; nothing is moved.
 3. **Editor.** Replace the placeholder sentence in the new `CLAUDE.md` with one or two sentences on what the
    project is for.
 4. **Claude session.** Start Claude Code from the project root. In the first reply of each session the model runs

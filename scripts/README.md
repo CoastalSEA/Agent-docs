@@ -28,29 +28,50 @@ Run each script with the interpreter and path given in the live `machine.md` (do
 | `log_retention.py` | Report session transcripts of a project that will be deleted soon; optional start-of-session notice |
 | `check_docx_skill.py` | Find the `docx` skill scripts that `proofread` uses, check their interface and warn when they change |
 | `endnote_lib.py` | Read and maintain a project EndNote library under `sources/references/` |
+| `outputs_layout.py` | Shared module: the outputs layout (flat or topic folders) read from `outputs/TOPICS.md` |
 
 ## run_control.py
 
-Prepares and closes the output folder of a task, `outputs/<task>/`. In a git project where `outputs/` is tracked, a run overwrites the task folder and stays pending until you review it. Otherwise each run gets a new folder `outputs/<task>-<DDMMYY>-run<N>/`.
+Prepares and closes the output folder of a task, `outputs/<task>/`, or `outputs/<topic>/<task>/` in a topic project (see outputs_layout.py below). In a git project where `outputs/` is tracked, a run overwrites the task folder and stays pending until you review it. Otherwise each run gets a new folder `outputs/<task>-<DDMMYY>-run<N>/`.
 
 | Command | What it does |
 |---|---|
-| `start <task>` | Prepares the folder, writes `run_info.txt` and prints the absolute path. Run it before a task writes outputs. On a rerun it removes the files of the earlier run, in subfolders too, and keeps `.md` reports. |
-| `path <task>` | Prints the folder a `start` would use. Changes nothing. |
+| `start <task> [--topic T]` | Prepares the folder, writes `run_info.txt` and prints the absolute path. Run it before a task writes outputs. On a rerun it removes the files of the earlier run, in subfolders too, and keeps `.md` reports. In a topic project a new task takes `--topic T` or the form `T/<task>`, or goes to the default topic; an existing task goes to its present folder. |
+| `path <task> [--topic T]` | Prints the folder a `start` would use. Changes nothing. |
+| `where <task>` | Prints the present folder of a task (the latest run folder in run folder mode). Exit code 1 for an unknown or archived task. Project code reads another run's outputs through it. |
 | `check <task> [--allow F]` | Runs the file guard and shows what `accept` would commit. |
 | `accept <task> ["question"] [--allow F]` | Guard, commit, annotated tag and `outputs/INDEX.md` row (if the project keeps one). |
 | `reject <task> ["question"] [--allow F]` | As `accept`, with the tag suffix `-rejected` and the status "not adopted". |
 | `discard <task>` | Restores the folder to the last accepted run and deletes pending files. Ask first. |
 | `status` | Lists pending task folders, guard failures and tags with no INDEX row. |
+| `layout flat\|topics` | Settles the outputs layout and writes `outputs/TOPICS.md` (`topics` adds the default topic `general`). Refused once any task folder, run tag or INDEX row exists. |
+| `topics list` | The topics, their state, scope, plan reference and task folders. |
+| `topics add <T> "<scope>" --plan "<reference>"` | Adds an open topic. `close <T>` stops new tasks in it (reruns are allowed, with a notice); `reopen <T>` undoes that; `rename <old> <new>` only for a topic that holds no task. The default topic cannot be closed. These edit `TOPICS.md` only; run them only on the user's instruction. |
 
 - Only the user accepts, rejects or discards a run.
 - Without a question, `accept` and `reject` reuse the question of the last tag of the task.
 - The file guard excludes `.pdf .docx .pptx .zip .7z .rar .gz .pyc` and Office lock files. Images may be up to 1 MB, other files up to 5 MB, and a folder up to 25 MB. `--allow <file>` (repeatable, path relative to the task folder) passes a named file.
-- Task names are reduced to letters, digits, `-` and `_`.
+- Task names are reduced to letters, digits, `-` and `_`. In a topic project the topic and the task are reduced separately, and the slash is only a separator.
+- In a topic project, task names are unique in the project: a new name that equals a task folder in any topic, an INDEX row or a run tag is refused. Tags do not name the topic. `run_info.txt` and the tag message add `topic` and `folder` lines; `accept` also commits a changed `outputs/TOPICS.md`. A flat project's files are unchanged.
 - If the commit of `accept` or `reject` fails, nothing is tagged and `outputs/INDEX.md` is put back as it was. Fix the cause and run the command again.
 - Data check: `start` records the state of `data/` (names, sizes and times; not `DATA-NOTES.md` or README files) in `run_info.txt`. If `data/` differs later, `check` fails and `accept` and `reject` refuse, naming the files changed after the start. Deleted files are only counted. `--data-changed-ok` passes it once the user has reviewed the change. Runs without a record are not checked.
 
 Example: `<python> run_control.py start trend-fit --root "<project root>"`
+
+## outputs_layout.py
+
+The module that `run_control.py`, `archive_control.py`, `check_records.py`, `wrapup_status.py` and `project.py` import from their own folder; `deploy.py` installs it beside them. It is not run by hand (`--version` prints its version; `show` prints the layout and the task folders).
+
+`outputs/TOPICS.md` holds the layout:
+
+| `TOPICS.md` | Layout |
+|---|---|
+| none | Flat: `outputs/<task>/`. Every project made before the topic layout; nothing changes for it. |
+| `Layout: flat` | Flat; the file records that the choice was made. |
+| `Layout: undecided` | `start` refuses until `run_control.py layout topics` or `layout flat`. |
+| `Layout: topics` | `outputs/<topic>/<task>/`. Every folder in `outputs/` is a topic in the table (columns topic, scope, plan reference, state `open` or `closed`), with a line `Default topic: general` for tasks given without a topic. INDEX rows name `topic/task`. |
+
+The layout is fixed once any task folder, run tag or INDEX row exists. There is no migration tool, and a topic that holds a task is never renamed or merged.
 
 ## archive_control.py
 
@@ -59,7 +80,7 @@ Removes finished task folders from the working tree without losing them. The fol
 | Command | What it does |
 |---|---|
 | `archive <task> [<task> ...] [--message TEXT] [--no-commit]` | Refuses unless the folder is committed, unchanged, has no git-ignored files and has a `current` row in `outputs/INDEX.md`. Then tags, marks the row `archived`, removes the folder and commits the removal with `INDEX.md`. |
-| `restore <task>` | Checks the latest archive tag out into `outputs/<task>/` (staged, not committed) and sets the row back to `current`. |
+| `restore <task>` | Checks the latest archive tag out into the folder named in its tag message, `outputs/<task>/` or `outputs/<topic>/<task>/` (staged, not committed), and sets the row back to `current`. |
 | `list` | Prints the archived tasks and their tags. |
 
 ## check_records.py
@@ -75,6 +96,7 @@ Checks `data/DATA-NOTES.md`, `records/DECISIONS.md`, `outputs/INDEX.md` and the 
 - `--max N` limits the lines listed per flag (default 40).
 - `--memory DIR` overrides the memory folder (default `~/.claude/projects/<launch-folder-key>/memory/`).
 - A missing record file is reported and its checks are skipped.
+- Check 14 runs only when `outputs/TOPICS.md` exists. It fails on a missing or unknown layout line, a topic layout without its default topic row, a folder in `outputs/` that is not a topic, and an undecided layout once runs exist; an undecided layout with no runs is a note. In a topic project the INDEX check compares the task folders one level below the topics.
 - No file is written.
 
 ## wrapup_status.py
@@ -109,16 +131,18 @@ Reports which project template level a project is at (minimal, handoff or full),
 
 ```
 <python> project.py status [--quiet] [--root <project root>]
-<python> project.py init --level minimal|handoff|full [--library] [--apply] --templates <claude-md folder> [--root <project root>]
+<python> project.py init --level minimal|handoff|full [--topics | --flat | --layout-later] [--library] [--apply] --templates <claude-md folder> [--root <project root>]
 ```
 
 - `status` prints the level in use, the number of files in `data/` (not `DATA-NOTES.md` or README files), the number of runs (task folders and git tags that look like `<task>-<DDMMYY>-run<N>`), the number of notes in the Claude memory folder for the project, the recommended level and the files each level is missing. The last line is `Status: OK at <level>`, `Status: UPGRADE SUGGESTED to <level>` or `Status: NO TEMPLATE`; `--quiet` prints only that line. Nothing is written.
 - The recommendation: from minimal or handoff to full when `data/` holds 3 or more files or there are 5 or more runs; from minimal to handoff when the memory folder holds notes or there are earlier runs. The script cannot count a repeated check because an earlier result was not found, so the handoff template still names it.
 - `init` is a dry run unless `--apply` is given. It adds the files of the level that are missing, never overwrites a file, and appends the missing lines to `.gitignore` (the `sources/` line at least, in a git project). An existing `CLAUDE.md` that differs from the template is left as it is and named, so that it is merged by hand.
+- `status` also reports the outputs layout: flat, topics with the open topics, or undecided. While it is undecided the last line ends with `OUTPUTS LAYOUT UNDECIDED`, so the session raises it. In a flat project with 15 or more task folders it adds advice that acts within the project: archive finished tasks, and begin new task names with a phase prefix such as `wp2-`.
+- In a project with no task folder, run tag, INDEX row or `outputs/TOPICS.md`, the dry run of `init` prints the layout choice, and `--apply` needs one of `--topics` (a plan with phases or work packages, or many runs expected), `--flat` (a series of prompts with no plan) or `--layout-later` (decide before the first run). It writes `outputs/TOPICS.md` at every level; `--topics` also writes the default topic. In a project that already has runs, or a `TOPICS.md`, the options are not needed and nothing about the layout is written. Exit code 1 when `--apply` needs an option.
 - `--library` also appends the block in `claude-md/project-library-block.md` to `CLAUDE.md` (a project EndNote library under `sources/references/`), unless `CLAUDE.md` already has a `## Project library` heading. Fill in its brackets.
 - `--templates` is needed when the script is run from `~/.claude/scripts/`. It is optional when the script is run from the repository.
 - The memory folder is `~/.claude/projects/<project path with dashes>/memory/` (under `CLAUDE_CONFIG_DIR` if that is set).
-- Exit code 0 on success, 2 if the folder or the templates cannot be used.
+- Exit code 0 on success, 1 if `init --apply` needs a layout option, 2 if the folder or the templates cannot be used.
 
 ## hook_push_check.py
 

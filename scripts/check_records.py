@@ -40,6 +40,12 @@ Flags (for review, not failures; a legitimate edit also changes a file time):
       over 1,000 characters dated 091126 or later is a failure; an older one is a flag (the limit is not retroactive).
   13. DECISIONS.md with more rows than --max-lines (default 100), or more than 60,000 characters: move the oldest rows
       with rotate_records.py.
+  14. outputs/TOPICS.md, only when it exists (read through outputs_layout.py beside this script). Fails: a missing or
+      unknown layout line, or a topic layout with no default topic row; in a topic project, a folder in outputs/ that
+      is not a topic of the table; an undecided layout although runs exist. Note: an undecided layout with no runs.
+      In a topic project, check 3 compares the task folders one level below the topics (INDEX.md names topic/task)
+      and a cited outputs/<topic>/<task>/... path resolves directly. Without TOPICS.md, or with 'Layout: flat',
+      nothing changes.
 Office lock files (names that start with '~$') are skipped everywhere: they are temporary, not project files.
 The checks find missing items, wording and dates only. A wrong status in INDEX.md, or a stale statement that has no
 status word and cites no changed file, is not detected. Update a status when later work changes what a run means.
@@ -52,6 +58,7 @@ Created using: Sonnet5-v1.0-date: 200926
 (revised by claude-sonnet-5-5-v5.5-date: 081126: moved to scripts/; --root and --version)
 (revised by claude-sonnet-5-5-v5.5-date: 091126: version 1.1, checks 12 and 13 on the size of DECISIONS.md)
 (revised by claude-fable-5-2-v5.2-date: 111126: version 1.2, a missing bare name or git-ignored path is a flag)
+(revised by claude-opus-5-5-v5.5-date: 231126: version 1.3, topic layout and check 14)
 """
 import argparse
 import datetime as dt
@@ -62,7 +69,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.2"
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
+import outputs_layout as ol  # noqa: E402
+
+VERSION = "1.3"
 ROW_WARN, ROW_HARD, ROW_TARGET = 800, 1000, 500  # characters in a DECISIONS.md row
 HARD_FROM = (26, 11, 9)  # (year, month, day): rows dated on or after 091126 must keep to ROW_HARD
 MAX_CHARS = 60000  # characters in DECISIONS.md
@@ -115,8 +125,9 @@ def resolve(tok, root, names):
     if "/" not in rel and rel in names:
         return root
     parts = rel.split("/")
-    first = parts[1] if parts[0] == "outputs" and len(parts) > 1 else parts[0]
-    if first in ARCHIVED:  # a folder removed by archive_control.py: the archive tag holds it
+    parts = parts[1:] if parts[0] == "outputs" and len(parts) > 1 else parts
+    # A folder removed by archive_control.py (task, or topic/task in a topic project): the archive tag holds it.
+    if parts[0] in ARCHIVED or "/".join(parts[:2]) in ARCHIVED:
         return root
     return None
 
@@ -264,14 +275,18 @@ def main():
             runs.add(cells[0].strip("`"))
             if len(cells) > 1 and cells[1].startswith("`"):
                 folders.add(cells[1].strip("`").rstrip("/\\"))
-        disk = {p.name for p in (root / "outputs").iterdir() if p.is_dir()} if (root / "outputs").exists() else set()
-        a = sorted(r for r in runs if r not in tags and r not in disk and r not in ARCHIVED_RUNS)
+        # Task folders: outputs/<task> (flat) or outputs/<topic>/<task> (topics), named as in the INDEX.md second cell.
+        found = ol.all_task_folders(root)
+        disk = {p.relative_to(root / "outputs").as_posix() for p in found}
+        found_names = {p.name for p in found}
+        a = sorted(r for r in runs if r not in tags and r not in disk and r not in found_names and r not in ARCHIVED_RUNS)
         b = sorted(tags - runs)
         try:
             res = subprocess.run(["git", "status", "--porcelain", "-uall", "--", "outputs"], cwd=root,
                                  capture_output=True, text=True)
-            dirty = {ln[3:].split("/")[1] for ln in res.stdout.splitlines()
-                     if ln[3:].count("/") >= 2 and not is_lock(ln[3:].rsplit("/", 1)[-1])} if res.returncode == 0 else set()
+            lay = ol.layout_or_flat(root)
+            dirty = {lab for lab in (ol.task_label(root, ln[3:], lay) for ln in res.stdout.splitlines()
+                                     if not is_lock(ln[3:].rsplit("/", 1)[-1])) if lab} if res.returncode == 0 else set()
         except OSError:
             dirty = set()
         pend = sorted((disk - runs - folders) & dirty)
@@ -437,6 +452,28 @@ def main():
             print(f"13. DECISIONS.md size: {len(rows)} rows (limit {args.max_lines}), {total} characters (limit {MAX_CHARS})"
                   + ("; move the oldest rows with rotate_records.py" if over_rows or over_chars else ""))
             flags += int(over_rows) + int(over_chars)
+
+    # 14. outputs layout (only when outputs/TOPICS.md exists)
+    reg = ol.read_registry(root)
+    if reg is not None:
+        problems, notes = list(reg["errors"]), []
+        if not reg["errors"] and reg["layout"] == "topics":
+            problems += [f"folder outputs/{p.name}/ is not a topic in outputs/TOPICS.md" for p in ol.topic_dirs(root)
+                         if p.name not in reg["topics"]]
+        elif not reg["errors"] and reg["layout"] == "undecided":
+            if ol.has_runs(root):
+                problems.append("the layout is undecided although runs exist")
+            else:
+                notes.append("the layout is undecided: choose it with run_control.py layout topics or layout flat "
+                             "before the first run")
+        shown = reg["layout"] if not reg["errors"] else "malformed"
+        print(f"14. Outputs layout: {shown}" + (f", {len(reg['topics'])} topics" if shown == "topics" else "")
+              + f"; {len(problems)} problems")
+        for x in problems[:args.max]:
+            print(f"     FAIL: {x}")
+        for x in notes:
+            print(f"     note: {x}")
+        failures += len(problems)
 
     print(f"Result:{'FAIL' if failures else 'PASS'} ({failures} failures, {flags} flags for review)")
     return 1 if failures else 0

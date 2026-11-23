@@ -2,6 +2,8 @@ r"""Report whether the handoff is current, so a checkpoint or wrap-up is not for
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }091126$
 Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.1: an uncommitted deletion counts as a change)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.2: pending runs counted two levels deep in a topic
+                project, through outputs_layout.py beside this script)
 
 The handoff is `records/HANDOFF.md`. It is git-ignored in some projects, so its file time is the only
 record of when it was written. It is stale when a changed file is newer than it. Changed files are
@@ -27,7 +29,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.1"
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
+import outputs_layout as ol  # noqa: E402
+
+VERSION = "1.2"
 ROW = re.compile(r"^\| \d{6} \|")
 TOLERANCE = 2.0  # seconds: files written in the same wrap-up step
 
@@ -119,8 +124,8 @@ def main(argv):
                 out.append(f"Changed after the handoff: {len(newer)} file(s); newest {p}, {stamp(t)}")
             else:
                 out.append("No changed file is newer than the handoff.")
-            pending = {p.replace("\\", "/").split("/")[1] for p in uncommitted
-                       if p.replace("\\", "/").startswith("outputs/") and p.replace("\\", "/").count("/") >= 2}
+            lay = ol.layout_or_flat(root)
+            pending = {lab for lab in (ol.task_label(root, p, lay) for p in uncommitted) if lab}
             out.append(f"Pending runs (uncommitted task folders under outputs/): {len(pending)}")
             code, diff = git(root, "diff", "HEAD", "-U0", "--", "records/DECISIONS.md")
             added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and ROW.match(ln[1:])) if code == 0 else 0

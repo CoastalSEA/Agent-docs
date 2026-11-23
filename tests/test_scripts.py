@@ -1426,12 +1426,12 @@ class ProjectScript(unittest.TestCase):
         r = self.pr("init", "--level", "minimal", "--library", "--templates", str(self.templates))
         self.assertIn("Would add to CLAUDE.md: the Project library block", r.stdout)
         self.assertEqual(claude.read_text(encoding="utf-8"), before)
-        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual(r.returncode, 0, r.stderr)
         text = claude.read_text(encoding="utf-8")
         self.assertTrue(text.startswith(before))
         self.assertEqual(text.count("## Project library"), 1)
-        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "minimal", "--library", "--apply", "--flat", "--templates", str(self.templates))
         self.assertIn("Exists, left as it is: the Project library block", r.stdout)
         self.assertEqual(claude.read_text(encoding="utf-8"), text)
 
@@ -1441,7 +1441,7 @@ class ProjectScript(unittest.TestCase):
         handoff.write_text("my handoff", encoding="utf-8")
         claude = self.root / "CLAUDE.md"
         claude.write_text("my rules", encoding="utf-8")
-        r = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "full", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(handoff.read_text(encoding="utf-8"), "my handoff")
         self.assertEqual(claude.read_text(encoding="utf-8"), "my rules")
@@ -1449,11 +1449,11 @@ class ProjectScript(unittest.TestCase):
         for rel in ("data/DATA-NOTES.md", "outputs/INDEX.md", "records/DECISIONS.md", "products/PRODUCTS.md", ".gitignore"):
             self.assertTrue((self.root / rel).is_file(), rel)
         self.assertEqual(self.pr("status").stdout.count("none"), 3, self.pr("status").stdout)
-        again = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        again = self.pr("init", "--level", "full", "--apply", "--flat", "--templates", str(self.templates))
         self.assertIn("Nothing to add.", again.stdout)
 
     def test_the_template_claude_md_is_copied_when_there_is_none(self):
-        r = self.pr("init", "--level", "minimal", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "minimal", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((self.root / "CLAUDE.md").read_bytes(),
                          (self.templates / "project-template-minimal" / "CLAUDE.md").read_bytes())
@@ -1461,19 +1461,19 @@ class ProjectScript(unittest.TestCase):
     def test_gitignore_lines_are_appended_once(self):
         self.level("full")
         (self.root / ".gitignore").write_text("# mine\nbuild/\nsources/", encoding="utf-8")
-        r = self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "full", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual(r.returncode, 0, r.stderr)
         text = (self.root / ".gitignore").read_text(encoding="utf-8")
         self.assertTrue(text.startswith("# mine\nbuild/\nsources/\n"), text)
         self.assertEqual(text.count("sources/"), 2 if "# Downloaded sources" in text else 1)
         self.assertEqual(text.count("products/*"), 1)
         self.assertEqual(text.count("__pycache__/"), 1)
-        self.pr("init", "--level", "full", "--apply", "--templates", str(self.templates))
+        self.pr("init", "--level", "full", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8"), text)
 
     def test_a_git_project_at_a_lower_level_gets_the_sources_line(self):
         git(self.root, "init", "-q", "-b", "main")
-        r = self.pr("init", "--level", "minimal", "--apply", "--templates", str(self.templates))
+        r = self.pr("init", "--level", "minimal", "--apply", "--flat", "--templates", str(self.templates))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((self.root / ".gitignore").read_text(encoding="utf-8").strip(), "sources/")
 
@@ -1789,6 +1789,378 @@ class HookPushCheckForms(HookPushCheck):
         self.times(work_age=10, handoff_age=100)
         for command in ("echo legit push", "ls digit push"):
             self.assertEqual(self.hook(command).returncode, 0, command)
+
+
+
+# ---------------------------------------------------------------- outputs layout (topic folders)
+
+FLAT_BASELINE = "fa2c2cc"  # the last commit before the topic layout: its scripts are the reference for a flat project
+LAYOUT_SCRIPTS = ("run_control.py", "archive_control.py", "check_records.py", "wrapup_status.py")
+
+
+def baseline_available():
+    r = subprocess.run(["git", "-C", str(REPO), "cat-file", "-e", f"{FLAT_BASELINE}:scripts/run_control.py"],
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+class FlatProjectUnchanged(unittest.TestCase):
+    """A flat project without TOPICS.md gives the same files, tags, INDEX.md rows and reports as the scripts before
+    the topic layout (apart from dates, versions, commit hashes and folder names)."""
+
+    def setUp(self):
+        if not baseline_available():
+            self.skipTest(f"commit {FLAT_BASELINE} is not in this clone")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.old = Path(self.tmp.name) / "old"
+        self.old.mkdir()
+        for name in LAYOUT_SCRIPTS:
+            text = subprocess.run(["git", "-C", str(REPO), "show", f"{FLAT_BASELINE}:scripts/{name}"],
+                                  capture_output=True, text=True, encoding="utf-8").stdout
+            (self.old / name).write_text(text, encoding="utf-8")
+
+    def cycle(self, scripts, label):
+        base = Path(self.tmp.name) / label
+        root = base / "proj"
+        (root / "outputs").mkdir(parents=True)
+        (root / "records").mkdir()
+        shutil.copy(TEMPLATE / "outputs" / "INDEX.md", root / "outputs" / "INDEX.md")
+        (root / "records" / "DECISIONS.md").write_text(
+            "# Decisions\n\n| Date | Decision | Reason | Evidence |\n|---|---|---|---|\n"
+            "| 231126 | d | r | `outputs/demo/r.txt` |\n", encoding="utf-8")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "init")
+        out = []
+
+        def step(script, *args):
+            r = run(scripts / script, *args, "--root", str(root))
+            out.append(f"$ {script} {' '.join(args)} -> {r.returncode}\n{r.stdout}{r.stderr}")
+            return r
+
+        for task, text, question in (("demo", "one", "Q1?"), ("demo", "two", None), ("other", "x", "Q2?")):
+            step("run_control.py", "path", task)
+            step("run_control.py", "start", task)
+            (root / "outputs" / task / "r.txt").write_text(text, encoding="utf-8")
+            out.append((root / "outputs" / task / "run_info.txt").read_text(encoding="utf-8"))
+            step("run_control.py", "status")
+            step("run_control.py", "check", task)
+            step("run_control.py", *(["accept", task] + ([question] if question else [])))
+        step("archive_control.py", "archive", "other")
+        step("archive_control.py", "list")
+        step("archive_control.py", "restore", "other")
+        git(root, "commit", "-q", "-m", "restore")
+        step("check_records.py", "--memory", str(base / "memory"))
+        step("wrapup_status.py")
+        out.append((root / "outputs" / "INDEX.md").read_text(encoding="utf-8"))
+        for tag in git(root, "tag", "-l").split():
+            out.append(f"{tag}: " + git(root, "tag", "-l", "--format=%(contents)", tag))
+        out.append(git(root, "log", "--format=%s", "--name-status"))
+        text = "\n".join(out).replace(str(root), "<root>").replace(str(base), "<base>")
+        text = re.sub(r"(version:?|\.py) \d+\.\d+", r"\1 <v>", text, flags=re.I)
+        text = re.sub(r"commit at start: \w+", "commit at start: <hash>", text)
+        return re.sub(r"\d{6} \d{2}:\d{2}", "<time>", text)
+
+    def test_same_files_tags_rows_and_reports_as_before(self):
+        old = self.cycle(self.old, "old")
+        new = self.cycle(REPO / "scripts", "new")
+        self.assertEqual(new.splitlines(), old.splitlines())
+
+
+class TopicLayout(Project):
+    """A topic project with the default topic and two topics from the plan."""
+
+    def setUp(self):
+        super().setUp()
+        self.ok(self.rc("layout", "topics"))
+        self.ok(self.rc("topics", "add", "t1", "first phase", "--plan", "plan.md section 1"))
+        self.ok(self.rc("topics", "add", "t2", "second phase", "--plan", "plan.md section 2"))
+        if self.tracked:
+            git(self.root, "add", "-A")
+            git(self.root, "commit", "-q", "-m", "topics")
+
+    def ok(self, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def refused(self, r, text):
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(text, r.stderr)
+
+    def run_in(self, arg, rel, text="one", *start_args):
+        self.ok(self.rc("start", arg, *start_args))
+        (self.root / "outputs" / rel / "r.txt").write_text(text, encoding="utf-8")
+
+    def tag_message(self, tag):
+        return git(self.root, "tag", "-l", "--format=%(contents)", tag)
+
+
+class TopicLayoutRuns(TopicLayout):
+    def test_start_accept_and_where_in_a_topic(self):
+        self.run_in("t1/a", "t1/a")
+        info = (self.root / "outputs" / "t1" / "a" / "run_info.txt").read_text(encoding="utf-8")
+        self.assertIn("topic: t1", info)
+        self.assertIn("folder: outputs/t1/a", info)
+        self.assertIn(f"proposed tag: a-{TODAY}-run1", info)
+        r = self.ok(self.rc("accept", "a", "Q?"))
+        self.assertIn("outputs/t1/a/", r.stdout)
+        tag = f"a-{TODAY}-run1"
+        self.assertIn(tag, self.tags())
+        self.assertIn("outputs/t1/a/r.txt", git(self.root, "ls-files"))
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+        self.assertEqual(self.index_rows()[0][:4], [f"`{tag}`", "`t1/a`", "Q?", "current"])
+        message = self.tag_message(tag)
+        self.assertEqual(message.splitlines()[0], "Q?")
+        self.assertIn("Topic: t1", message)
+        self.assertIn("Folder: outputs/t1/a", message)
+        self.run_in("a", "t1/a", "two")
+        self.ok(self.rc("accept", "a"))
+        self.assertEqual([r[3] for r in self.index_rows()], ["superseded", "current"])
+        self.assertEqual(self.index_rows()[1][1], "`t1/a`")
+        where = self.ok(self.rc("where", "a")).stdout.strip()
+        self.assertEqual(Path(where), self.root / "outputs" / "t1" / "a")
+        self.refused(self.rc("where", "nothing"), "No folder for task nothing")
+
+    def test_a_new_task_without_a_topic_goes_to_the_default_topic(self):
+        r = self.ok(self.rc("path", "b"))
+        self.assertEqual(Path(r.stdout.strip()), self.root / "outputs" / "general" / "b")
+        self.run_in("b", "general/b")
+        self.run_in("c", "t2/c", "one", "--topic", "t2")
+        self.assertTrue((self.root / "outputs" / "t2" / "c" / "run_info.txt").is_file())
+        status = self.ok(self.rc("status")).stdout
+        self.assertIn("general/b", status)
+        self.assertIn("t2/c", status)
+
+    def test_an_unknown_topic_is_refused_with_the_add_command(self):
+        r = self.rc("start", "nope/d")
+        self.refused(r, "run_control.py topics add nope")
+        self.assertIn("Open topics: general, t1, t2", r.stderr)
+        self.refused(self.rc("start", "d", "--topic", "nope"), "topics add nope")
+        self.assertFalse((self.root / "outputs" / "nope").exists())
+
+    def test_a_closed_topic_refuses_a_new_task_and_allows_a_rerun(self):
+        self.run_in("t2/c", "t2/c")
+        self.ok(self.rc("accept", "c", "Q?"))
+        self.ok(self.rc("topics", "close", "t2"))
+        self.refused(self.rc("start", "t2/e"), "Topic t2 is closed")
+        r = self.ok(self.rc("start", "c"))
+        self.assertIn("topic t2 is closed", r.stderr)
+        self.ok(self.rc("topics", "reopen", "t2"))
+        self.ok(self.rc("start", "t2/e"))
+        self.refused(self.rc("topics", "close", "general"), "default topic")
+        self.assertIn("t2 (open)", self.ok(self.rc("topics", "list")).stdout)
+
+    def test_rename_only_an_empty_topic(self):
+        self.ok(self.rc("topics", "add", "t3", "spare", "--plan", "plan.md section 3"))
+        self.ok(self.rc("topics", "rename", "t3", "t4"))
+        text = (self.root / "outputs" / "TOPICS.md").read_text(encoding="utf-8")
+        self.assertIn("| `t4` | spare |", text)
+        self.assertNotIn("`t3`", text)
+        self.run_in("t1/a", "t1/a")
+        self.ok(self.rc("accept", "a", "Q?"))
+        self.refused(self.rc("topics", "rename", "t1", "t9"), "never renamed")
+
+    def test_a_task_name_is_unique_in_the_project(self):
+        self.run_in("t1/a", "t1/a")
+        self.refused(self.rc("start", "t2/a"), "already exists in topic t1")
+        self.refused(self.rc("start", "a", "--topic", "t2"), "already exists in topic t1")
+        git(self.root, "tag", f"z-{TODAY}-run1")  # a tag with no topic in its message
+        self.refused(self.rc("start", "t1/z"), "already used in this project")
+        with open(self.root / "outputs" / "INDEX.md", "a", encoding="utf-8") as fh:
+            fh.write(f"| `y-{TODAY}-run1` | `t1/y` | Q? | archived | |\n")
+        self.refused(self.rc("start", "t2/y"), "already exists in topic t1")
+        self.refused(self.rc("start", "t1/x/y"), "more than one '/'")
+
+    def test_topics_commands_are_refused_in_a_flat_project(self):
+        flat = Path(self.tmp.name) / "flat"
+        (flat / "outputs").mkdir(parents=True)
+        r = run(RUN_CONTROL, "topics", "add", "t1", "s", "--plan", "p", "--root", str(flat))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no topics", r.stderr)
+        r = run(RUN_CONTROL, "start", "a", "--topic", "t1", "--root", str(flat))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("flat outputs layout", r.stderr)
+        self.assertFalse((flat / "outputs" / "TOPICS.md").exists())
+
+    def test_forward_slashes_in_rows_tags_and_messages(self):
+        self.run_in("t1/a", "t1/a")
+        self.ok(self.rc("accept", "a", "Q?"))
+        for text in (self.tag_message(f"a-{TODAY}-run1"), (self.root / "outputs" / "INDEX.md").read_text(encoding="utf-8"),
+                     (self.root / "outputs" / "t1" / "a" / "run_info.txt").read_text(encoding="utf-8")):
+            self.assertNotIn("\\", text)
+        self.ok(run(ARCHIVE, "archive", "a", "--root", str(self.root)))
+        self.assertNotIn("\\", self.tag_message(f"archive-a-{TODAY}"))
+
+    def test_wrapup_status_counts_a_pending_topic_run(self):
+        (self.root / "records").mkdir()
+        (self.root / "records" / "HANDOFF.md").write_text("h", encoding="utf-8")
+        self.run_in("t1/a", "t1/a")
+        self.run_in("b", "general/b")
+        r = run(STATUS, "--root", str(self.root))
+        self.assertIn("Pending runs (uncommitted task folders under outputs/): 2", r.stdout)
+
+
+class TopicLayoutUndecided(Project):
+    def test_start_refuses_until_the_layout_is_chosen(self):
+        (self.root / "outputs" / "TOPICS.md").write_text("# Output topics\n\nLayout: undecided\n", encoding="utf-8")
+        for command in ("start", "path"):
+            r = self.rc(command, "a")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("layout topics", r.stderr)
+            self.assertIn("layout flat", r.stderr)
+        self.assertEqual(self.rc("layout", "topics").returncode, 0)
+        text = (self.root / "outputs" / "TOPICS.md").read_text(encoding="utf-8")
+        self.assertIn("Layout: topics", text)
+        self.assertIn("Default topic: general", text)
+        self.assertIn("| `general` |", text)
+        self.assertEqual(self.rc("start", "a").returncode, 0)
+        self.assertTrue((self.root / "outputs" / "general" / "a").is_dir())
+        r = self.rc("layout", "flat")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("layout is fixed", r.stderr)
+
+    def test_layout_is_refused_in_an_existing_flat_project(self):
+        self.start_and_write()
+        self.accept(question="Q?")
+        r = self.rc("layout", "topics")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("layout is fixed", r.stderr)
+        self.assertFalse((self.root / "outputs" / "TOPICS.md").exists())
+
+
+class TopicLayoutRecords(TopicLayout):
+    def check(self):
+        return run(CHECK, str(self.root), "--memory", str(Path(self.tmp.name) / "memory"))
+
+    def test_check_records_in_a_topic_project(self):
+        (self.root / "records").mkdir()
+        (self.root / "records" / "DECISIONS.md").write_text(
+            "# Decisions\n\n| Date | Decision | Reason | Evidence |\n|---|---|---|---|\n"
+            "| 231126 | d | r | `outputs/t1/a/note.md` |\n", encoding="utf-8")
+        self.run_in("t1/a", "t1/a")
+        (self.root / "outputs" / "t1" / "a" / "note.md").write_text("n", encoding="utf-8")
+        self.ok(self.rc("accept", "a", "Q?"))
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "records")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertRegex(r.stdout, r"Cited paths: [1-9][0-9]* checked, 0 not found")
+        self.assertIn("folder without row: 0", r.stdout)
+        self.assertIn("14. Outputs layout: topics, 3 topics; 0 problems", r.stdout)
+        (self.root / "outputs" / "stray").mkdir()
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("folder outputs/stray/ is not a topic", r.stdout)
+
+    def test_a_topics_file_without_a_layout_line_fails(self):
+        (self.root / "outputs" / "TOPICS.md").write_text("# Output topics\n", encoding="utf-8")
+        r = self.check()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no layout line", r.stdout)
+        self.refused(self.rc("start", "a"), "no layout line")
+
+    def test_an_undecided_layout_with_no_runs_is_a_note(self):
+        (self.root / "outputs" / "TOPICS.md").write_text("Layout: undecided\n", encoding="utf-8")
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("note: the layout is undecided", r.stdout)
+
+    def test_archive_and_restore_round_trip(self):
+        self.run_in("t1/a", "t1/a")
+        self.ok(self.rc("accept", "a", "Q?"))
+        self.ok(run(ARCHIVE, "archive", "a", "--root", str(self.root)))
+        self.assertFalse((self.root / "outputs" / "t1" / "a").exists())
+        self.assertIn("Archive of outputs/t1/a/.", self.tag_message(f"archive-a-{TODAY}"))
+        self.assertEqual(self.index_rows()[0][3], "archived")
+        self.assertEqual(self.check().returncode, 0)
+        self.refused(self.rc("where", "a"), "archived")
+        self.ok(run(ARCHIVE, "restore", "a", "--root", str(self.root)))
+        self.assertEqual((self.root / "outputs" / "t1" / "a" / "r.txt").read_text(encoding="utf-8"), "one")
+        self.assertEqual(self.index_rows()[0][3], "current")
+
+
+class TopicLayoutFolderMode(TopicLayout):
+    tracked = False
+
+    def test_run_folders_sit_in_the_topic(self):
+        for n in (1, 2):
+            r = self.ok(self.rc("start", "t1/a" if n == 1 else "a"))
+            self.assertEqual(Path(r.stdout.strip()), self.root / "outputs" / "t1" / f"a-{TODAY}-run{n}")
+        where = self.ok(self.rc("where", "a")).stdout.strip()
+        self.assertEqual(Path(where).name, f"a-{TODAY}-run2")
+        self.assertIn("Guard for outputs/t1/a-", self.ok(self.rc("check", "a")).stdout)
+
+
+class ProjectLayoutChoice(ProjectScript):
+    """project.py: stage 1 of the layout choice, the layout report and the advice for a long flat outputs/."""
+
+    def init(self, *args):
+        return self.pr("init", "--level", "minimal", *args, "--templates", str(self.templates))
+
+    def topics_text(self):
+        return (self.root / "outputs" / "TOPICS.md").read_text(encoding="utf-8")
+
+    def test_the_dry_run_prints_the_choice_and_apply_needs_an_option(self):
+        r = self.init()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Outputs layout: not chosen yet", r.stdout)
+        self.assertIn("--layout-later", r.stdout)
+        r = self.init("--apply")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("needs one of --topics, --flat or --layout-later", r.stderr)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_each_option_writes_the_matching_layout(self):
+        for option, line in (("--topics", "Layout: topics"), ("--flat", "Layout: flat"),
+                             ("--layout-later", "Layout: undecided")):
+            shutil.rmtree(self.root)
+            self.root.mkdir()
+            r = self.init(option, "--apply")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(line, self.topics_text())
+            self.assertEqual("Default topic: general" in self.topics_text(), option == "--topics")
+        self.assertIn("OUTPUTS LAYOUT UNDECIDED", self.last(self.pr("status")))
+
+    def test_no_option_is_needed_in_a_project_with_runs(self):
+        self.runs(1)
+        r = self.init("--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.root / "outputs" / "TOPICS.md").exists())
+        r = self.init("--topics", "--apply")
+        self.assertIn("Outputs layout: not written", r.stdout)
+        self.assertFalse((self.root / "outputs" / "TOPICS.md").exists())
+
+    def test_status_reports_the_layout(self):
+        self.level("minimal")
+        self.assertIn("Outputs layout: flat (no outputs/TOPICS.md)", self.pr("status").stdout)
+        self.assertEqual(self.last(self.pr("status")), "Status: OK at minimal")
+        (self.root / "outputs").mkdir()
+        (self.root / "outputs" / "TOPICS.md").write_text("Layout: undecided\n", encoding="utf-8")
+        self.assertTrue(self.last(self.pr("status")).startswith("Status: OK at minimal; OUTPUTS LAYOUT UNDECIDED"))
+        self.assertTrue(self.pr("status", "--quiet").stdout.strip().endswith("layout flat)"))
+
+    def test_the_advice_appears_at_15_flat_task_folders(self):
+        self.level("full")
+        for i in range(14):
+            (self.root / "outputs" / f"task{i}").mkdir(parents=True)
+        self.assertNotIn("Advice:", self.pr("status").stdout)
+        (self.root / "outputs" / "task14").mkdir()
+        out = self.pr("status").stdout
+        self.assertIn("Advice: outputs/ holds 15 task folders", out)
+        self.assertIn("archive_control.py archive", out)
+        self.assertNotIn("layout", out.split("Advice:")[1].splitlines()[0])
+
+    def test_no_advice_in_a_topic_project(self):
+        self.level("full")
+        (self.root / "outputs" / "TOPICS.md").write_text(
+            "Layout: topics\nDefault topic: general\n\n| Topic | Scope | Plan reference | State |\n|---|---|---|---|\n"
+            "| `general` | s | none | open |\n", encoding="utf-8")
+        for i in range(15):
+            (self.root / "outputs" / "general" / f"task{i}").mkdir(parents=True)
+        out = self.pr("status").stdout
+        self.assertNotIn("Advice:", out)
+        self.assertIn("Outputs layout: topics; open topics: general", out)
 
 
 if __name__ == "__main__":
