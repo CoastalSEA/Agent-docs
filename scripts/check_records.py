@@ -41,8 +41,10 @@ Flags (for review, not failures; a legitimate edit also changes a file time):
   13. DECISIONS.md with more rows than --max-lines (default 100), or more than 60,000 characters: move the oldest rows
       with rotate_records.py.
   14. outputs/TOPICS.md, only when it exists (read through outputs_layout.py beside this script). Fails: a missing or
-      unknown layout line, or a topic layout with no default topic row; in a topic project, a folder in outputs/ that
-      is not a topic of the table; an undecided layout although runs exist. Note: an undecided layout with no runs.
+      unknown layout line, a topic layout with no default topic row, a topic row without five cells, a missing (flat)
+      or repeated prefix; in a topic project, a folder in outputs/ that is not a topic of the table; an undecided
+      layout although runs exist. Note: an undecided layout with no runs. Flag: in a flat project with prefixes, a
+      task folder that starts with no listed prefix and is not named in backticks in TOPICS.md.
       In a topic project, check 3 compares the task folders one level below the topics (INDEX.md names topic/task)
       and a cited outputs/<topic>/<task>/... path resolves directly. Without TOPICS.md, or with 'Layout: flat',
       nothing changes.
@@ -59,6 +61,8 @@ Created using: Sonnet5-v1.0-date: 200926
 (revised by claude-sonnet-5-5-v5.5-date: 091126: version 1.1, checks 12 and 13 on the size of DECISIONS.md)
 (revised by claude-fable-5-2-v5.2-date: 111126: version 1.2, a missing bare name or git-ignored path is a flag)
 (revised by claude-opus-5-5-v5.5-date: 231126: version 1.3, topic layout and check 14)
+(revised by claude-opus-5-5-v5.5-date: 231126: version 1.4, check 14 reads the prefix column; in a flat project
+ with prefixes a task folder with no listed prefix that TOPICS.md does not name is a flag)
 """
 import argparse
 import datetime as dt
@@ -72,7 +76,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
 import outputs_layout as ol  # noqa: E402
 
-VERSION = "1.3"
+VERSION = "1.4"
 ROW_WARN, ROW_HARD, ROW_TARGET = 800, 1000, 500  # characters in a DECISIONS.md row
 HARD_FROM = (26, 11, 9)  # (year, month, day): rows dated on or after 091126 must keep to ROW_HARD
 MAX_CHARS = 60000  # characters in DECISIONS.md
@@ -466,14 +470,21 @@ def main():
             else:
                 notes.append("the layout is undecided: choose it with run_control.py layout topics or layout flat "
                              "before the first run")
+        report = ol.prefix_report(root)
+        unplaced = report[1] if report else []
         shown = reg["layout"] if not reg["errors"] else "malformed"
-        print(f"14. Outputs layout: {shown}" + (f", {len(reg['topics'])} topics" if shown == "topics" else "")
-              + f"; {len(problems)} problems")
+        print(f"14. Outputs layout: {shown}" + (f", {len(reg['topics'])} topics" if shown in ("topics", "flat")
+                                                 and reg["topics"] else "")
+              + f"; {len(problems)} problems" + (f"; flag: {len(unplaced)} task folders with no listed prefix"
+                                                 if report else ""))
         for x in problems[:args.max]:
             print(f"     FAIL: {x}")
         for x in notes:
             print(f"     note: {x}")
+        for x in unplaced[:args.max]:
+            print(f"     no listed prefix and not named in outputs/TOPICS.md: {x}")
         failures += len(problems)
+        flags += len(unplaced)
 
     print(f"Result:{'FAIL' if failures else 'PASS'} ({failures} failures, {flags} flags for review)")
     return 1 if failures else 0

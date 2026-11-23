@@ -230,7 +230,9 @@ file) and full (adds the data notes, the output index, the decision log and a `.
      packages, and adds them with `run_control.py topics add` once you agree the table. Until then runs go to the
      default topic `general`.
 
-   A project that already has runs needs no layout option and stays flat; nothing is moved.
+   A project that already has runs needs no layout option and stays flat; nothing is moved. It can still record topic
+   prefixes for its new task names in `outputs/TOPICS.md` (`Layout: flat`) with `run_control.py topics add <topic> ... --prefix <prefix>`;
+   `project.py status` then reports task folders that have no listed prefix.
 3. **Editor.** Replace the placeholder sentence in the new `CLAUDE.md` with one or two sentences on what the
    project is for.
 4. **Claude session.** Start Claude Code from the project root. In the first reply of each session the model runs

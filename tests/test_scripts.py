@@ -1919,12 +1919,12 @@ class TopicLayoutRuns(TopicLayout):
         self.assertEqual([r[3] for r in self.index_rows()], ["superseded", "current"])
         self.assertEqual(self.index_rows()[1][1], "`t1/a`")
         where = self.ok(self.rc("where", "a")).stdout.strip()
-        self.assertEqual(Path(where), self.root / "outputs" / "t1" / "a")
+        self.assertEqual(Path(where).resolve(), (self.root / "outputs" / "t1" / "a").resolve())
         self.refused(self.rc("where", "nothing"), "No folder for task nothing")
 
     def test_a_new_task_without_a_topic_goes_to_the_default_topic(self):
         r = self.ok(self.rc("path", "b"))
-        self.assertEqual(Path(r.stdout.strip()), self.root / "outputs" / "general" / "b")
+        self.assertEqual(Path(r.stdout.strip()).resolve(), (self.root / "outputs" / "general" / "b").resolve())
         self.run_in("b", "general/b")
         self.run_in("c", "t2/c", "one", "--topic", "t2")
         self.assertTrue((self.root / "outputs" / "t2" / "c" / "run_info.txt").is_file())
@@ -1949,13 +1949,13 @@ class TopicLayoutRuns(TopicLayout):
         self.ok(self.rc("topics", "reopen", "t2"))
         self.ok(self.rc("start", "t2/e"))
         self.refused(self.rc("topics", "close", "general"), "default topic")
-        self.assertIn("t2 (open)", self.ok(self.rc("topics", "list")).stdout)
+        self.assertIn("t2 (open, prefix none)", self.ok(self.rc("topics", "list")).stdout)
 
     def test_rename_only_an_empty_topic(self):
         self.ok(self.rc("topics", "add", "t3", "spare", "--plan", "plan.md section 3"))
         self.ok(self.rc("topics", "rename", "t3", "t4"))
         text = (self.root / "outputs" / "TOPICS.md").read_text(encoding="utf-8")
-        self.assertIn("| `t4` | spare |", text)
+        self.assertIn("| `t4` | none | spare |", text)
         self.assertNotIn("`t3`", text)
         self.run_in("t1/a", "t1/a")
         self.ok(self.rc("accept", "a", "Q?"))
@@ -1972,12 +1972,12 @@ class TopicLayoutRuns(TopicLayout):
         self.refused(self.rc("start", "t2/y"), "already exists in topic t1")
         self.refused(self.rc("start", "t1/x/y"), "more than one '/'")
 
-    def test_topics_commands_are_refused_in_a_flat_project(self):
+    def test_a_flat_topic_needs_a_prefix_and_start_takes_no_topic(self):
         flat = Path(self.tmp.name) / "flat"
         (flat / "outputs").mkdir(parents=True)
         r = run(RUN_CONTROL, "topics", "add", "t1", "s", "--plan", "p", "--root", str(flat))
         self.assertEqual(r.returncode, 1)
-        self.assertIn("no topics", r.stderr)
+        self.assertIn("needs --prefix", r.stderr)
         r = run(RUN_CONTROL, "start", "a", "--topic", "t1", "--root", str(flat))
         self.assertEqual(r.returncode, 1)
         self.assertIn("flat outputs layout", r.stderr)
@@ -2086,7 +2086,7 @@ class TopicLayoutFolderMode(TopicLayout):
     def test_run_folders_sit_in_the_topic(self):
         for n in (1, 2):
             r = self.ok(self.rc("start", "t1/a" if n == 1 else "a"))
-            self.assertEqual(Path(r.stdout.strip()), self.root / "outputs" / "t1" / f"a-{TODAY}-run{n}")
+            self.assertEqual(Path(r.stdout.strip()).resolve(), (self.root / "outputs" / "t1" / f"a-{TODAY}-run{n}").resolve())
         where = self.ok(self.rc("where", "a")).stdout.strip()
         self.assertEqual(Path(where).name, f"a-{TODAY}-run2")
         self.assertIn("Guard for outputs/t1/a-", self.ok(self.rc("check", "a")).stdout)
@@ -2154,13 +2154,111 @@ class ProjectLayoutChoice(ProjectScript):
     def test_no_advice_in_a_topic_project(self):
         self.level("full")
         (self.root / "outputs" / "TOPICS.md").write_text(
-            "Layout: topics\nDefault topic: general\n\n| Topic | Scope | Plan reference | State |\n|---|---|---|---|\n"
-            "| `general` | s | none | open |\n", encoding="utf-8")
+            "Layout: topics\nDefault topic: general\n\n| Topic | Prefix | Scope | Plan reference | State |\n"
+            "|---|---|---|---|---|\n| `general` | none | s | none | open |\n", encoding="utf-8")
         for i in range(15):
             (self.root / "outputs" / "general" / f"task{i}").mkdir(parents=True)
         out = self.pr("status").stdout
         self.assertNotIn("Advice:", out)
         self.assertIn("Outputs layout: topics; open topics: general", out)
+
+
+class FlatPrefixes(Project):
+    """A flat project with runs that records topic prefixes in outputs/TOPICS.md (Layout: flat)."""
+
+    def setUp(self):
+        super().setUp()
+        self.start_and_write("demo")
+        self.accept("demo", "Q?")
+
+    def ok(self, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def add(self, topic, prefix):
+        return self.rc("topics", "add", topic, f"{topic} scope", "--plan", f"plan {topic}", "--prefix", prefix)
+
+    def registry(self):
+        return (self.root / "outputs" / "TOPICS.md").read_text(encoding="utf-8")
+
+    def status(self):
+        return run(PROJECT, "status", "--root", str(self.root)).stdout
+
+    def check(self):
+        return run(CHECK, str(self.root), "--memory", str(Path(self.tmp.name) / "memory"))
+
+    def test_layout_flat_is_allowed_with_runs_and_topics_is_not(self):
+        r = self.rc("layout", "topics")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("layout is fixed", r.stderr)
+        self.ok(self.rc("layout", "flat"))
+        self.assertIn("Layout: flat", self.registry())
+        self.assertIn("already flat", self.ok(self.rc("layout", "flat")).stdout)
+        self.assertEqual(self.rc("layout", "topics").returncode, 1)
+
+    def test_the_first_topic_writes_a_flat_registry_and_other_text_is_kept(self):
+        self.ok(self.add("lit", "lit-"))
+        self.assertIn("Layout: flat", self.registry())
+        self.assertIn("| `lit` | `lit-` | lit scope | plan lit | open |", self.registry())
+        with open(self.root / "outputs" / "TOPICS.md", "a", encoding="utf-8") as fh:
+            fh.write("\n## Existing task folders\n\n| Topic | Task folders |\n|---|---|\n| literature | `demo` |\n")
+        self.ok(self.add("wp2", "wp2-"))
+        text = self.registry()
+        self.assertIn("| literature | `demo` |", text)
+        self.assertLess(text.index("`lit-`"), text.index("`wp2-`"))
+        self.assertLess(text.index("`wp2-`"), text.index("## Existing task folders"))
+        r = self.add("other", "lit-")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("already the prefix of topic lit", r.stderr)
+        r = self.rc("topics", "add", "x", "s", "--plan", "p")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("needs --prefix", r.stderr)
+        self.assertIn("lit (open, prefix lit-)", self.ok(self.rc("topics", "list")).stdout)
+
+    def test_start_is_not_changed_by_the_prefixes(self):
+        self.ok(self.add("lit", "lit-"))
+        r = self.ok(self.rc("start", "no-prefix-task"))
+        self.assertEqual(Path(r.stdout.strip()).resolve(), (self.root / "outputs" / "no-prefix-task").resolve())
+
+    def test_status_checks_the_prefixes_instead_of_the_size_advice(self):
+        self.ok(self.add("lit", "lit-"))
+        self.assertIn("task folders not placed: 1", self.status())  # demo is not named yet
+        with open(self.root / "outputs" / "TOPICS.md", "a", encoding="utf-8") as fh:
+            fh.write("\nExisting task folders: `demo`.\n")
+        for i in range(15):
+            (self.root / "outputs" / f"lit-{i}").mkdir()
+        out = self.status()
+        self.assertIn("Outputs layout: flat; task prefixes: lit-; task folders not placed: 0", out)
+        self.assertNotIn("Advice:", out)
+        (self.root / "outputs" / "stray").mkdir()
+        out = self.status()
+        self.assertIn("Advice: 1 task folders start with no prefix listed in outputs/TOPICS.md", out)
+        self.assertIn("stray", out)
+
+    def test_check_records_flags_an_unplaced_folder(self):
+        self.ok(self.add("lit", "lit-"))
+        r = self.check()
+        self.assertIn("14. Outputs layout: flat, 1 topics; 0 problems; flag: 1 task folders with no listed prefix", r.stdout)
+        self.assertIn("not named in outputs/TOPICS.md: demo", r.stdout)
+
+    def test_check_records_fails_a_bad_row(self):
+        head = "Layout: flat\n\n| Topic | Prefix | Scope | Plan reference | State |\n|---|---|---|---|---|\n"
+        for rows, text in (("| `lit` | literature | Phase 1 | open |\n", "not five"),
+                           ("| `lit` | none | s | p | open |\n", "no usable prefix"),
+                           ("| `a` | `x-` | s | p | open |\n| `b` | `x-` | s | p | open |\n", "given to two topics")):
+            (self.root / "outputs" / "TOPICS.md").write_text(head + rows, encoding="utf-8")
+            r = self.check()
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(text, r.stdout)
+
+    def test_rename_only_a_topic_whose_prefix_no_task_uses(self):
+        self.ok(self.add("lit", "lit-"))
+        self.ok(self.add("spare", "sp-"))
+        self.ok(self.rc("topics", "rename", "spare", "spare2"))
+        self.start_and_write("lit-search")
+        r = self.rc("topics", "rename", "lit", "literature")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("lit-search starts with its prefix lit-", r.stderr)
 
 
 if __name__ == "__main__":

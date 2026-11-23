@@ -2,12 +2,17 @@ r"""The layout of a project's outputs/ folder: flat, or topic folders (shared by
 
 A project chooses its layout in `outputs/TOPICS.md`:
 - no TOPICS.md: flat, as every project made before this module. Task folders are outputs/<task>/.
-- `Layout: flat`: flat; the file only records that the choice was made.
+- `Layout: flat`: flat; the file records that the choice was made, and its table may list topics, each with
+  the prefix that new task names of that topic start with. `project.py status` and `check_records.py` then
+  report task folders that have no listed prefix and are not named in backticks in the file. Run control
+  does not enforce the prefixes (skills choose their own task names). `layout flat` may be written in a
+  project that already has runs, because it changes nothing.
 - `Layout: undecided`: no run may start until the layout is chosen.
 - `Layout: topics`: every folder in outputs/ is a topic named in the table, and its subfolders are task
   folders, outputs/<topic>/<task>/. A line `Default topic: <topic>` names the topic of a new task given
-  without one. The table has the columns topic, scope, plan reference and state (open or closed).
-The layout is fixed once any task folder, run tag or INDEX.md row exists. Task names are unique in the
+  without one.
+Every TOPICS.md table has five columns: topic, prefix (`none` allowed in a topic project), scope, plan reference
+and state (open or closed). A topic project's layout is fixed once any task folder, run tag or INDEX.md row exists. Task names are unique in the
 project, so a tag (<task>-<DDMMYY>-run<N>) never names the topic.
 
 Imported by run_control.py, archive_control.py, check_records.py, wrapup_status.py and project.py from their
@@ -25,7 +30,9 @@ Functions (root is the project root, a Path):
   index_name(root, task)           the second INDEX.md cell, without backticks: 'task' or 'topic/task'
   task_label(root, rel)            the task label of a path under outputs/ ('task' or 'topic/task'), or None
   has_runs(root)                   whether any task folder, run tag or INDEX.md row exists
-  registry_text(layout, rows, default)      the text of a TOPICS.md
+  registry_text(layout, rows, default)      the text of a new TOPICS.md
+  write_registry(root, reg)        write the layout, default and topic rows, keeping every other line of the file
+  prefix_report(root)              (prefixes, task folders with no listed prefix and not named) in a flat project
 Usage: outputs_layout.py --version | outputs_layout.py show [--root <project root>]
 Inputs:  outputs/TOPICS.md, the folders under outputs/, outputs/INDEX.md and the git tags of the project.
 Outputs: return values; `show` prints the layout and the task folders. No file is written by this module
@@ -34,13 +41,15 @@ Exit:    0; 1 with a message when TOPICS.md is malformed (show).
 Version: see VERSION; `--version` prints it.
 
 Created using: claude-opus-5-5-v5.5-date: 231126
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.1: prefix column; topics and prefixes in a flat project;
+                the registry is edited in place)
 """
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.1"
 REGISTRY = "TOPICS.md"
 LAYOUTS = ("flat", "topics", "undecided")
 DEFAULT_TOPIC = "general"
@@ -48,6 +57,8 @@ DEFAULT_SCOPE = "runs before the plan or outside its phases"
 RUN_TAG = re.compile(r"^(.+)-\d{6}-run\d+(-rejected)?$")
 RUN_FOLDER = re.compile(r"^(.+)-\d{6}-run\d+$")
 FORM = "a line 'Layout: flat', 'Layout: topics' or 'Layout: undecided'"
+HEADER = ["| Topic | Prefix | Scope | Plan reference | State |", "|---|---|---|---|---|"]
+PREFIX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 class LayoutError(Exception):
@@ -73,8 +84,9 @@ def git(root, *args):
 # ---------------------------------------------------------------- the registry
 
 def read_registry(root):
-    """{'layout', 'default', 'topics': {name: {'scope', 'plan', 'state'}}, 'order': [names], 'errors': [...]}
-    or None if outputs/TOPICS.md does not exist. A missing or unknown layout line is listed in 'errors'."""
+    """{'layout', 'default', 'topics': {name: {'prefix', 'scope', 'plan', 'state'}}, 'order': [names], 'errors': [...]}
+    or None if outputs/TOPICS.md does not exist. A missing or unknown layout line, a topic row without five cells,
+    a missing, malformed or repeated prefix (a flat project needs one in every row) are listed in 'errors'."""
     path = Path(root) / "outputs" / REGISTRY
     if not path.is_file():
         return None
@@ -90,15 +102,31 @@ def read_registry(root):
             continue
         if line.startswith("| `"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            if len(cells) == 4:
-                name = cells[0].strip("`")
-                reg["topics"][name] = {"scope": cells[1], "plan": cells[2], "state": cells[3].lower()}
-                reg["order"].append(name)
+            name = cells[0].strip("`")
+            if len(cells) != 5:
+                reg["errors"].append(f"the row of topic {name!r} in outputs/TOPICS.md has {len(cells)} cells, not five "
+                                     f"(topic, prefix, scope, plan reference, state)")
+                continue
+            reg["topics"][name] = {"prefix": cells[1].strip("`"), "scope": cells[2], "plan": cells[3],
+                                   "state": cells[4].lower()}
+            reg["order"].append(name)
     if reg["layout"] is None:
         reg["errors"].append(f"outputs/TOPICS.md has no layout line: expected {FORM}")
     elif reg["layout"] not in LAYOUTS:
         reg["errors"].append(f"outputs/TOPICS.md has an unknown layout {reg['layout']!r}: expected {FORM}")
-    elif reg["layout"] == "topics":
+    seen = {}
+    for name in reg["order"]:
+        pre = reg["topics"][name]["prefix"]
+        if pre.lower() == "none" and reg["layout"] == "topics":
+            continue
+        if pre.lower() == "none" or not PREFIX.match(pre):
+            reg["errors"].append(f"topic {name!r} in outputs/TOPICS.md has no usable prefix ({pre!r})"
+                                 + (": a flat project needs one in every row" if reg["layout"] == "flat" else ""))
+        elif pre in seen:
+            reg["errors"].append(f"the prefix {pre!r} is given to two topics in outputs/TOPICS.md ({seen[pre]}, {name})")
+        else:
+            seen[pre] = name
+    if reg["layout"] == "topics":
         if not reg["default"]:
             reg["errors"].append("outputs/TOPICS.md sets the topic layout but has no line 'Default topic: <topic>'")
         elif reg["default"] not in reg["topics"]:
@@ -120,7 +148,7 @@ def layout(root):
 
 
 def registry_text(layout_name, rows=None, default=None):
-    """The text of outputs/TOPICS.md. rows: [(topic, scope, plan reference, state)]."""
+    """The text of a new outputs/TOPICS.md. rows: [(topic, prefix, scope, plan reference, state)]."""
     lines = ["# Output topics", "",
              "This file lives at `outputs/TOPICS.md` and is tracked in git. It records the layout of `outputs/`, "
              "which is fixed once the first run exists. Change it only with `run_control.py layout` and "
@@ -129,10 +157,14 @@ def registry_text(layout_name, rows=None, default=None):
     if layout_name == "topics":
         lines += [f"Default topic: {default}", "",
                   "Each topic is a folder `outputs/<topic>/` that holds task folders. A closed topic takes no new "
-                  "task. A topic that holds a task is never renamed or merged.", "",
-                  "| Topic | Scope | Plan reference | State |", "|---|---|---|---|"]
-        for name, scope, plan, state in rows or []:
-            lines.append(f"| `{name}` | {cell(scope)} | {cell(plan)} | {state} |")
+                  "task. A topic that holds a task is never renamed or merged.", ""] + HEADER
+        lines += [row_text(*r) for r in rows or []]
+    elif layout_name == "flat":
+        lines += ["", "Task folders are `outputs/<task>/`. New task names start with the prefix of their topic "
+                      "(`run_control.py topics add <topic> \"<scope>\" --plan \"<reference>\" --prefix <prefix>`). A task "
+                      "folder named in backticks in this file counts as placed. A topic that holds a task is never "
+                      "renamed.", ""] + HEADER
+        lines += [row_text(*r) for r in rows or []]
     elif layout_name == "undecided":
         lines += ["", "No run can start until the layout is chosen: `run_control.py layout topics` or "
                       "`run_control.py layout flat`."]
@@ -143,11 +175,44 @@ def cell(text):
     return " ".join(str(text).split()).replace("|", "/") or "none"
 
 
+def row_text(name, prefix, scope, plan, state):
+    return f"| `{name}` | {'`' + prefix + '`' if prefix.lower() != 'none' else 'none'} | {cell(scope)} | {cell(plan)} | {state} |"
+
+
 def write_registry(root, reg):
-    rows = [(n, reg["topics"][n]["scope"], reg["topics"][n]["plan"], reg["topics"][n]["state"]) for n in reg["order"]]
+    """Write the topic rows (and the default topic line) into outputs/TOPICS.md, keeping every other line."""
+    rows = [row_text(n, reg["topics"][n]["prefix"], reg["topics"][n]["scope"], reg["topics"][n]["plan"],
+                     reg["topics"][n]["state"]) for n in reg["order"]]
     path = Path(root) / "outputs" / REGISTRY
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(registry_text(reg["layout"], rows, reg["default"]), encoding="utf-8")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    at = [i for i, ln in enumerate(lines) if ln.startswith("| `") and len(ln.strip().strip("|").split("|")) == 5]
+    if at:  # replace the old topic rows with the new ones, where the first one stood
+        keep = [ln for i, ln in enumerate(lines) if i not in set(at)]
+        lines = keep[:at[0]] + rows + keep[at[0]:]
+    else:
+        head = next((i for i, ln in enumerate(lines) if ln.replace(" ", "").lower().startswith("|topic|prefix|")), None)
+        if head is None:
+            lines += [""] + HEADER
+            head = len(lines) - 2
+        lines = lines[:head + 2] + rows + lines[head + 2:]
+    if reg["default"]:
+        lines = [f"Default topic: {reg['default']}" if ln.startswith("Default topic:") else ln for ln in lines]
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def prefix_report(root):
+    """(prefixes, unplaced) in a flat project with listed prefixes, else None. unplaced: task names (run folders
+    reduced to their task) that start with no listed prefix and are not named in backticks in TOPICS.md."""
+    reg = read_registry(root)
+    if not reg or reg["errors"] or reg["layout"] != "flat":
+        return None
+    prefixes = [reg["topics"][n]["prefix"] for n in reg["order"]]
+    if not prefixes:
+        return None
+    named = set(re.findall(r"`([^`]+)`", (Path(root) / "outputs" / REGISTRY).read_text(encoding="utf-8")))
+    tasks = sorted({base_task(p.name) for p in all_task_folders(root)})
+    return prefixes, [t for t in tasks if not t.startswith(tuple(prefixes)) and t not in named]
 
 
 # ---------------------------------------------------------------- tasks and folders

@@ -27,10 +27,15 @@ Commands (python run_control.py <command> ... [--root <project root>]):
   where <task>                  print the present folder of a task (the latest run folder in run folder mode);
                                 exit 1 for an unknown task. Project code reads other runs' outputs through it
   layout flat|topics            settle the layout (writes outputs/TOPICS.md; `topics` adds the default topic
-                                `general`). Refused once any task folder, run tag or INDEX.md row exists
-  topics list                   the topics, their state and their task folders
-  topics add <T> "<scope>" --plan "<reference>" | close <T> | reopen <T> | rename <old> <new>
-                                edit outputs/TOPICS.md only; run them only on the user's instruction. The
+                                `general`). `topics` is refused once any task folder, run tag or INDEX.md row
+                                exists; `flat` is also allowed then, when there is no TOPICS.md, as it changes
+                                nothing
+  topics list                   the topics, their prefixes, their state and their task folders
+  topics add <T> "<scope>" --plan "<reference>" [--prefix P] | close <T> | reopen <T> | rename <old> <new>
+                                edit outputs/TOPICS.md only (its other lines are kept); run them only on the
+                                user's instruction. In a flat project a topic needs --prefix (the start of its new
+                                task names; not enforced by `start`), close only records the state, and the
+                                first `add` in a project without TOPICS.md writes `Layout: flat`. The
                                 default topic cannot be closed; rename only a topic that holds no task
   check <task> [--allow F]      file guard on the task folder (in run folder mode, the latest
                                 run folder of the task), and what `accept` would commit
@@ -85,6 +90,8 @@ Modified using: claude-fable-5-2-v5.2-date: 111126 (version 1.3: a rerun clears 
                 leaves no INDEX.md row; a task name is not read as a prefix of another)
 Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.4: topic layout through outputs_layout.py; where,
                 layout and topics commands)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.5: topics with prefixes in a flat project; layout flat
+                allowed in a project with runs)
 """
 
 import argparse
@@ -99,7 +106,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
 import outputs_layout as ol  # noqa: E402
 
-VERSION = "1.4"
+VERSION = "1.5"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {".pdf", ".docx", ".pptx", ".zip", ".7z", ".rar", ".gz", ".pyc"}
 IMAGES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp"}
@@ -563,21 +570,31 @@ def cmd_layout(root, choice):
     if current == choice:
         print(f"The outputs layout is already {choice} (outputs/TOPICS.md).")
         return 0
-    if ol.has_runs(root):
+    # Flat is what a project without TOPICS.md already does, so recording it is allowed in a project with runs.
+    flat_record = choice == "flat" and (reg is None or current == "undecided")
+    if ol.has_runs(root) and not flat_record:
         raise SystemExit("The outputs layout is fixed: this project already has task folders, run tags or INDEX.md "
                          f"rows, so the layout stays {ol.layout_or_flat(root)}.")
-    rows = [(ol.DEFAULT_TOPIC, ol.DEFAULT_SCOPE, "none", "open")] if choice == "topics" else []
+    rows = [(ol.DEFAULT_TOPIC, "none", ol.DEFAULT_SCOPE, "none", "open")] if choice == "topics" else []
     path = root / "outputs" / ol.REGISTRY
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(ol.registry_text(choice, rows, ol.DEFAULT_TOPIC), encoding="utf-8")
     print(f"Wrote outputs/TOPICS.md: Layout: {choice}"
           + (f", default topic {ol.DEFAULT_TOPIC}. Add the plan's topics with `topics add` once the user agrees "
-             f"the table." if choice == "topics" else "."))
+             f"the table." if choice == "topics" else ". Record topic prefixes with `topics add <topic> \"<scope>\" "
+             f"--plan \"<reference>\" --prefix <prefix>` once the user agrees them."))
     return 0
 
 
-def topic_holds_tasks(root, topic):
-    """Why the topic counts as holding a task (a folder, an INDEX.md row or a tag), or None."""
+def topic_holds_tasks(root, topic, reg=None):
+    """Why the topic counts as holding a task (a folder, an INDEX.md row or a tag), or None.
+
+    In a flat project a topic holds the task folders and run tags whose names start with its prefix."""
+    if reg and reg["layout"] == "flat":
+        pre = reg["topics"][topic]["prefix"]
+        hits = [p.name for p in ol.all_task_folders(root) if p.name.startswith(pre)]
+        hits += [t for t in ol.run_tags(root) if t.startswith(pre)]
+        return f"{hits[0]} starts with its prefix {pre}" if hits else None
     if (root / "outputs" / topic).is_dir():
         return f"the folder outputs/{topic}/ exists"
     for c in ol.index_cells(root):
@@ -591,26 +608,54 @@ def topic_holds_tasks(root, topic):
 
 def cmd_topics(root, action, args):
     reg = layout_call(ol.checked_registry, root)
-    if not reg or reg["layout"] != "topics":
+    if reg is None and action == "add":
+        # A project without TOPICS.md is flat; recording that changes nothing, so the first topic writes it.
+        if not args.prefix:
+            raise SystemExit(f"In a flat project a topic needs --prefix: the start of its new task names (for example "
+                             f"--prefix {args.topic}-). Nothing was written.")
+        path = root / "outputs" / ol.REGISTRY
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(ol.registry_text("flat"), encoding="utf-8")
+        print("Wrote outputs/TOPICS.md: Layout: flat (the layout this project already has).")
+        reg = layout_call(ol.checked_registry, root)
+    if not reg or reg["layout"] not in ("topics", "flat"):
         what = f"Outputs layout: {reg['layout'] if reg else 'flat (no outputs/TOPICS.md)'}; it has no topics."
         if action == "list":
             print(what)
             return 0
         raise SystemExit(what)
-    topics = reg["topics"]
+    topics, flat = reg["topics"], reg["layout"] == "flat"
     if action == "list":
         folders = ol.all_task_folders(root)
-        print(f"Outputs layout: topics; default topic {reg['default']}")
+        print(f"Outputs layout: {reg['layout']}" + (f"; default topic {reg['default']}" if not flat else ""))
         for n in reg["order"]:
             t = topics[n]
-            tasks = sorted(p.name for p in folders if p.parent.name == n)
-            print(f"  {n} ({t['state']}): {t['scope']} [plan: {t['plan']}]; task folders: {', '.join(tasks) or 'none'}")
+            if flat:
+                tasks = sorted(p.name for p in folders if p.name.startswith(t["prefix"]))
+            else:
+                tasks = sorted(p.name for p in folders if p.parent.name == n)
+            print(f"  {n} ({t['state']}, prefix {t['prefix']}): {t['scope']} [plan: {t['plan']}]; task folders: "
+                  f"{', '.join(tasks) or 'none'}")
+        report = ol.prefix_report(root)
+        if report and report[1]:
+            print(f"  task folders with no listed prefix and not named in outputs/TOPICS.md: {', '.join(report[1])}")
         return 0
     name = layout_call(ol.clean, args.topic, "Topic")
     if action == "add":
         if name in topics:
             raise SystemExit(f"Topic {name} exists ({topics[name]['state']}).")
-        topics[name] = {"scope": args.scope, "plan": args.plan, "state": "open"}
+        prefix = args.prefix
+        if flat and not prefix:
+            raise SystemExit(f"In a flat project a topic needs --prefix: the start of its new task names (for example "
+                             f"--prefix {name}-).")
+        if prefix:
+            prefix = prefix.strip()
+            if not ol.PREFIX.match(prefix):
+                raise SystemExit(f"Prefix {prefix!r} must use letters, digits, '-' and '_' only.")
+            used = [n for n in reg["order"] if topics[n]["prefix"] == prefix]
+            if used:
+                raise SystemExit(f"Prefix {prefix} is already the prefix of topic {used[0]}.")
+        topics[name] = {"prefix": prefix or "none", "scope": args.scope, "plan": args.plan, "state": "open"}
         reg["order"].append(name)
         done = f"Added topic {name}."
     else:
@@ -623,7 +668,9 @@ def cmd_topics(root, action, args):
             if topics[name]["state"] == "closed":
                 print(f"Topic {name} is already closed.")
                 return 0
-            topics[name]["state"], done = "closed", f"Closed topic {name}: it takes no new task; reruns are allowed."
+            topics[name]["state"], done = "closed", (
+                f"Closed topic {name}: the state is recorded; run control does not enforce prefixes in a flat project."
+                if flat else f"Closed topic {name}: it takes no new task; reruns are allowed.")
         elif action == "reopen":
             if topics[name]["state"] == "open":
                 print(f"Topic {name} is already open.")
@@ -633,7 +680,7 @@ def cmd_topics(root, action, args):
             new = layout_call(ol.clean, args.new, "Topic")
             if new in topics:
                 raise SystemExit(f"Topic {new} exists.")
-            why = topic_holds_tasks(root, name)
+            why = topic_holds_tasks(root, name, reg)
             if why:
                 raise SystemExit(f"Topic {name} cannot be renamed: {why}. A topic that holds a task is never renamed.")
             topics[new] = topics.pop(name)
@@ -679,6 +726,7 @@ def main(argv):
     p.add_argument("topic")
     p.add_argument("scope")
     p.add_argument("--plan", required=True, help="the section or file of the plan that defines the topic")
+    p.add_argument("--prefix", default=None, help="the start of the topic's new task names (needed in a flat project)")
     for name in ("close", "reopen"):
         tp.add_parser(name).add_argument("topic")
     p = tp.add_parser("rename")

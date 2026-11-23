@@ -2,6 +2,8 @@ r"""Report which project template level a project is at, and add the missing tem
 
 Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }101126$
 Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.3: the outputs layout, through outputs_layout.py)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.4: in a flat project with topic prefixes in
+                outputs/TOPICS.md, status checks the prefixes instead of giving the size advice)
 
 The project templates have three levels. Minimal holds `CLAUDE.md` only. Handoff adds `records/HANDOFF.md`. Full
 adds the data notes, the output index, the decision log, the products register and a `.gitignore`. The upgrade
@@ -15,7 +17,9 @@ Usage: project.py status [--quiet] [--root <project root>]
   status    prints the level in use, the counts (files in data/, runs, memory notes), the recommended level and the
             files each level is missing, and the outputs layout (flat, topics with the open topics, or undecided;
             read through outputs_layout.py beside this script). While the layout is undecided the last line says so.
-            In a flat project with 15 or more task folders it adds advice that acts within the project. --quiet
+            In a flat project with 15 or more task folders it adds advice that acts within the project; in a flat
+            project whose outputs/TOPICS.md lists topic prefixes it reports instead the task folders that have no
+            listed prefix and are not named there. --quiet
             prints only the last line. Nothing is written.
   init      is a dry run unless --apply is given. It adds the files of the level that are missing, never overwrites
             a file, and appends missing lines to `.gitignore`. An existing `CLAUDE.md` that differs from the template
@@ -44,7 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
 import outputs_layout as ol  # noqa: E402
 
-VERSION = "1.3"
+VERSION = "1.4"
 LEVELS = ("minimal", "handoff", "full")
 LEVEL_FILES = {
     "minimal": ["CLAUDE.md"],
@@ -210,12 +214,22 @@ def layout_report(root):
                 "(run_control.py layout topics, or layout flat)", None)
     if lay == "topics":
         return f"Outputs layout: topics; open topics: {', '.join(ol.open_topics(reg)) or 'none'}", None, None
+    report = ol.prefix_report(root)
+    if report:  # a flat project that records its topic prefixes: check them instead of giving the advice
+        prefixes, unplaced = report
+        advice = None
+        if unplaced:
+            advice = (f"Advice: {len(unplaced)} task folders start with no prefix listed in outputs/TOPICS.md and are "
+                      f"not named there: {', '.join(unplaced[:10])}{' ...' if len(unplaced) > 10 else ''}. Name each in "
+                      f"outputs/TOPICS.md, or give new tasks a listed prefix.")
+        return (f"Outputs layout: flat; task prefixes: {', '.join(prefixes)}; task folders not placed: {len(unplaced)}",
+                None, advice)
     tasks = {ol.base_task(p.name) for p in ol.all_task_folders(root)}
     advice = None
     if len(tasks) >= FLAT_ADVICE_LIMIT:
         advice = (f"Advice: outputs/ holds {len(tasks)} task folders. To keep the listing readable, archive finished "
-                  f"tasks with archive_control.py archive <task>, and begin new task names with a phase prefix such "
-                  f"as wp2-.")
+                  f"tasks with archive_control.py archive <task>, and begin new task names with a topic prefix such "
+                  f"as wp2-, recorded in outputs/TOPICS.md with run_control.py topics add <topic> ... --prefix <prefix>.")
     return f"Outputs layout: flat{'' if reg else ' (no outputs/TOPICS.md)'}", None, advice
 
 
@@ -342,7 +356,7 @@ def init(root, level, templates, apply, library=False, layout=None):
             with open(claude, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text + ("" if text.endswith("\n") else "\n") + "\n" + lib_block.read_text(encoding="utf-8"))
         if write_layout:
-            rows = [(ol.DEFAULT_TOPIC, ol.DEFAULT_SCOPE, "none", "open")] if layout == "topics" else []
+            rows = [(ol.DEFAULT_TOPIC, "none", ol.DEFAULT_SCOPE, "none", "open")] if layout == "topics" else []
             (root / "outputs").mkdir(exist_ok=True)
             with open(root / "outputs" / ol.REGISTRY, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(ol.registry_text(layout, rows, ol.DEFAULT_TOPIC))
