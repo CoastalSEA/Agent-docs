@@ -17,6 +17,7 @@ see Starting a project, which is in that section. To contribute, see `CONTRIBUTI
 ## Structure
 
 ```
+CHANGELOG.md     what changed in each release, and how to upgrade
 CONTRIBUTING.md  how to report a problem or propose a change
 .github/    the CI workflow and the issue templates
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | statusline | doctor)
