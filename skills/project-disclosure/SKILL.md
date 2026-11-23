@@ -20,8 +20,8 @@ guess it. Note it before running any other command, because the shell may move l
 
 Each session's logs live in a subfolder of `~/.claude/projects` named after
 the cwd it ran from, with `:` and path separators replaced by `-`. This
-encoding is ambiguous — a literal `-` inside a real folder name is
-indistinguishable from an encoded separator — so never trust the encoded name
+encoding is ambiguous (a literal `-` inside a real folder name is
+indistinguishable from an encoded separator), so never trust the encoded name
 by itself to decide what is "inside" the project. Instead:
 
 1. Build the encoded root prefix from the project root path and glob
@@ -32,8 +32,8 @@ by itself to decide what is "inside" the project. Instead:
    `user`-type entry). Keep the session only if that `cwd`, normalized
    (case-insensitive, slashes unified, trailing slash trimmed), is exactly
    the project root or a true subpath of it (a full path-segment match, not
-   a raw string prefix — `D:\ProjectX-Old` must not match root `D:\ProjectX`).
-3. A project folder can hold multiple `.jsonl` files — one per session.
+   a raw string prefix: `D:\ProjectX-Old` must not match root `D:\ProjectX`).
+3. A project folder can hold multiple `.jsonl` files, one per session.
    Filenames are random UUIDs, not date-ordered, so sort all matching
    sessions chronologically by their logged timestamps, not by filename.
 4. Subagent transcripts are not in the session file. A session id may have
@@ -47,29 +47,29 @@ by itself to decide what is "inside" the project. Instead:
 Report, in the output, which directories were actually found to have
 sessions (root plus any subfolders) so the scope is visible rather than
 assumed. If the project root was ever renamed or moved, sessions logged
-under the old path won't be found this way — say so as a known limitation
+under the old path will not be found this way. Say so as a known limitation
 rather than silently omitting them.
 
 ## What to extract, per session
 
 - **Model**: the `model` field on assistant messages. This is a model
-  id/nickname (e.g. `claude-sonnet-5`), not a formal version string — report
-  it as given, don't invent a version number.
-- **Provider / access method**: constant for every Claude Code session —
-  "Anthropic, via Claude Code CLI" — plus the CLI `version` field if present.
-  This doesn't need to be inferred from ambiguous log analysis; state it
+  id/nickname (e.g. `claude-sonnet-5`), not a formal version string. Report
+  it as given; do not invent a version number.
+- **Provider / access method**: constant for every Claude Code session:
+  "Anthropic, via Claude Code CLI", plus the CLI `version` field if present.
+  This does not need to be inferred from ambiguous log analysis; state it
   plainly.
 - **Permission mode**: the `permissionMode` field. This is the *only*
-  approval-related signal the logs contain — there is no per-tool-call
+  approval-related signal the logs contain; there is no per-tool-call
   approve/deny event. It is not necessarily constant for the whole
-  session — it can change partway through (e.g. `auto` to `default` and
+  session: it can change partway through (e.g. `auto` to `default` and
   back). Report it as the sequence of modes and the intervals they applied
   to, not as a single fixed value. Do not describe or imply per-action
-  approval records that don't exist, and do not conclude "a human stayed in
-  the loop" from this — that is a judgment call for the human, not the
+  approval records that do not exist, and do not conclude "a human stayed in
+  the loop" from this. That is a judgment call for the human, not the
   skill (see Checks).
 - **Files touched and commands run**: from `tool_use` entries (Read, Write,
-  Edit, Bash, etc.) — tool name plus its input.
+  Edit, Bash, etc.): tool name plus its input.
 - **Prompts**: the human `user` message text, in chronological order.
   Before including any prompt or command verbatim, scan it for anything
   that looks like a secret, credential, key, or token; redact it in place
@@ -125,8 +125,8 @@ the prompt appendix.
 **Detailed form, part 3: reporting checklist and appendix.** One row per
 session, with columns: date, model, access method, task/purpose (summarized
 from that session's prompts), permission mode, files touched, commands run,
-and a pointer to that session's entry in the prompt appendix (don't inline
-full prompt text into the table — it doesn't fit a row).
+and a pointer to that session's entry in the prompt appendix (do not inline
+full prompt text into the table; it does not fit a row).
 
 List a Write or Edit under files touched only if the log pairs it with a
 result that is not an error. Mark a refused or failed call as attempted,
@@ -143,5 +143,5 @@ chronological prompt text (redacted per above).
 - Name the checks that failed as well as the ones that passed.
 - Report permission mode and other facts plainly; do not characterize or
   draw conclusions from them (e.g. "a human stayed in the loop", "this was
-  closely supervised") — that judgment belongs to the person reading the
+  closely supervised"). That judgment belongs to the person reading the
   disclosure, not this skill.

@@ -40,7 +40,7 @@ Outputs: return values; `show` prints the layout and the task folders. No file i
 Exit:    0; 1 with a message when TOPICS.md is malformed (show).
 Version: see VERSION; `--version` prints it.
 
-Created using: claude-opus-5-5-v5.5-date: 231126
+Created using: $\text {Created using: }\ claude-opus-5-5-\text{v}5.5-\text {date: }231126$
 Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.1: prefix column; topics and prefixes in a flat project;
                 the registry is edited in place)
 """

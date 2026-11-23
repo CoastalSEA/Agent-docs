@@ -20,7 +20,7 @@ see Starting a project, which is in that section. To contribute, see `CONTRIBUTI
 CONTRIBUTING.md  how to report a problem or propose a change
 .github/    the CI workflow and the issue templates
 deploy.py   copies the master files to the Claude configuration folder (python deploy.py help | init | status | apply | hooks | statusline | doctor)
-scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), outputs_layout.py (the outputs layout module), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py
+scripts/    project scripts and the hook scripts (usage in scripts/README.md) installed to ~/.claude/scripts: run_control.py (output folders, tags, file guard), outputs_layout.py (the outputs layout module), archive_control.py, check_records.py, wrapup_status.py, rotate_records.py, hook_push_check.py, hook_guard.py, hook_confirm.py, log_retention.py, check_docx_skill.py, project.py, endnote_lib.py (project EndNote library)
 agents/     template for defining and tasking subagents
 claude-md/  template CLAUDE.md files (global, and project at three levels) and project record stubs
 hooks/      template prompt for creating a hook (the hook scripts that are installed are in scripts/)
@@ -50,8 +50,8 @@ mechanics of project-level vs. user-level vs. plugin-based deployment.
 
 **Hooks**: `hooks/` holds the template prompt for creating a hook. The hook scripts that `deploy.py hooks` registers (`hook_push_check.py`, `hook_guard.py`, `hook_confirm.py`) are in `scripts/`, with their tests.
 
-**Agents, prompts, settings, statusline, claude-md**: each is lower-volume than skills/mcp,
-so no per-item subfolder convention yet — see each folder's own `README.md` for what
+**Agents, prompts, statusline, claude-md**: each is lower-volume than skills/mcp,
+so no per-item subfolder convention yet; see each folder's own `README.md` for what
 belongs there.
 
 ## Wrap-up and records
@@ -121,8 +121,8 @@ python -m unittest discover -s tests
 `tests/test_scripts.py` runs the project scripts (`run_control`, `archive_control`, `check_records`, `wrapup_status`, `rotate_records`, `project`), the three hook scripts, `log_retention.py`, `check_docx_skill.py` and `deploy.py` in throwaway projects. Usage and what each test file covers are in `tests/README.md`.
 `tests/test_framework.py` checks the shared files: no machine-specific text, the template copy equals its master, skill
 frontmatter parses, the user-file forms keep their marker lines, every script has a version, and `deploy.py` installs
-every script and skill. Neither touches `~/.claude`. `tests/test_skill_fixtures.py` tests the skill fixtures without a model; `tests/skills/run_fixtures.py` runs skills on those fixtures with headless Claude Code sessions, by hand (see `tests/skills/README.md`). `.github/workflows/tests.yml` runs both on Windows, macOS and Linux
-for each push to `main`.
+every script and skill. Neither touches `~/.claude`. `tests/test_skill_fixtures.py` tests the skill fixtures without a model; `tests/skills/run_fixtures.py` runs skills on those fixtures with headless Claude Code sessions, by hand (see `tests/skills/README.md`). `.github/workflows/tests.yml` runs every test file except the fixture runner on
+Windows, macOS and Linux for each push to `main` and each pull request.
 
 ## Deployment
 
@@ -132,7 +132,7 @@ only Python 3 and no other package. Run it from the repo root with any Python 3 
 (the command for this machine is in `machine.md`):
 
 ```
-python deploy.py [help|init|status|apply|hooks|statusline|doctor] [--target PATH] [--diff] [--yes]
+python deploy.py [help|init|status|apply|hooks|statusline|doctor] [--target PATH] [--diff] [--yes] [--version]
 ```
 
 `python deploy.py help` prints these instructions.
@@ -311,20 +311,17 @@ configuration.
   interactive parts (skills, hooks, the status line, the EndNote server and the machine files) have been used on Windows. A clean
   install on Ubuntu 24.04 (Python 3.13) passed the unit tests, `deploy.py init`, `apply`, `doctor` and `hooks`, a session that quotes both
   marker lines, the data guard in a session started at the project root, and the `analysis-adversary` fixture (5 of 6 checks; the sixth
-  is a false failure in the check). That test found that the data guard did not cover a session started in a subfolder of the project;
-  the hooks now find the project root from the session folder upwards (unit tests only, not yet a live session). macOS has been
-  tested by CI only.
+  is a false failure in the check). The hooks find the project root from the session folder upwards, so a session started in a
+  subfolder is covered; that case has unit tests but no live session test. macOS has been tested by CI only.
 - After a Claude Code update or a skill sync, the `proofread` summary and `deploy.py doctor` warn if the `docx` skill scripts it uses have changed. Re-run `python tests/skills/run_fixtures.py proofread proofread-structure` (see `tests/skills/README.md`), then `check_docx_skill.py --accept` (see `scripts/README.md`).
 - A skill edited in a session does not take effect until a new session starts.
 - Permission modes. The rules and settings here use ask and deny rules only, which apply in every mode. The skills work in
   any mode, but in the default mode each shell, Python and PowerShell call asks for approval. The fixture runner needs auto
   mode and checks for it first (see `tests/skills/README.md`).
-- Before the script, files were copied by hand and checked with `diff`. The script replaces
-  that routine for the files in the table above.
 - For skills, see `skills/skill_location.md` for project-level, user-level and plugin-based
   deployment. When an MCP server's code lives here, its registration should point directly at
   this repo's copy rather than a project-local duplicate.
 
 ## Acknowledgement
 
-The starting point for many of the ideas contained in this repo, have evolved from the introduction to AI, provided by the course entitled "AI Agent-Driven Research Workflows" and organised by AI Horizons.
+Many of the ideas in this repository evolved from the introduction to AI given by the course "AI Agent-Driven Research Workflows", organised by AI Horizons.

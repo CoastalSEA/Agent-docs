@@ -1,14 +1,16 @@
 r"""Deploy the Agent-docs master files to the Claude configuration folder.
 
-Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}1.0-\text {date: }081126$
+Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }081126$
 Modified using: claude-sonnet-5-5-v5.5-date: 091126 (init and help)
 Modified using: claude-sonnet-5-5-v5.5-date: 101126 (statusline)
 Modified using: claude-fable-5-2-v5.2-date: 111126 (settings.json with a byte order mark or that is not JSON;
                 the skip list for skills; hooks for the PowerShell tool)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (VERSION and --version)
 
 Compares the master files in this repository with the live copies in the Claude configuration
 folder, and copies the ones that differ. Creates the two local user files on a new machine.
-Needs only Python 3 (standard library). Writes nothing unless the command is `apply` or `init`.
+Needs only Python 3 (standard library). Writes nothing unless the command is `apply`, `init`, `hooks` or
+`statusline`.
 
 Usage (run from any folder; the repository is the folder that holds this script):
   python deploy.py help       show the deployment instructions (the Deployment section of README.md)
@@ -39,6 +41,7 @@ Usage (run from any folder; the repository is the folder that holds this script)
                               exists. Changes nothing; exit 1 on any problem.
 Options:
   --target PATH   the configuration folder (default: ~/.claude). Use a scratch folder to test.
+  --version       print the script name and version.
 
 Inputs:
   claude-md/global-CLAUDE.md              -> <target>/CLAUDE.md
@@ -68,6 +71,7 @@ import sysconfig
 from datetime import date, datetime
 from pathlib import Path
 
+VERSION = "1.0"
 REPO = Path(__file__).resolve().parent
 
 # (source file, repository copy): the first file is the master.
@@ -736,6 +740,7 @@ def main(argv):
     ap.add_argument("--yes", action="store_true")
     ap.add_argument("--retention-notice", action="store_true")
     ap.add_argument("--replace-statusline", action="store_true")
+    ap.add_argument("--version", action="version", version=f"deploy.py {VERSION}")
     a = ap.parse_args(argv)
     target = Path(a.target).expanduser().resolve()
     if a.command == "help":

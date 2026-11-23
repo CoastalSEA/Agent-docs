@@ -1,4 +1,4 @@
-"""
+r"""
 EndNote MCP server: read-only access to an EndNote library for sourcing references.
 
 Inputs:  an EndNote .enl library file. The path is required, in the
@@ -11,16 +11,16 @@ Package: mcp 2.1.1 (Python MCP SDK, MCPServer class), pypdf for PDF text extract
 Date:    2026-08-28.
 Changed: 2026-09-27. get_reference and search_references now return EndNote's
          DOI field (column electronic_resource_number) under the key "doi",
-         exactly as stored. Created using: claude-opus-5-5-v5.5-date: 270926
+         exactly as stored. Created using: $\text {Created using: }\ claude-opus-5-5-\text{v}5.5-\text {date: }270926$
 Changed: 2026-11-08. ENDNOTE_LIBRARY_PATH is required; the built-in default path
-         was removed. Created using: claude-sonnet-5-5-v5.5-date: 081126
+         was removed. Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }081126$
 Changed: 2026-11-21. Entries in the trash are left out unless include_trash is set;
          search_references takes an exact keyword filter; get_reference returns the
          entry type name and the linked files; search_by_file_name finds entries by
          the name of a linked file; read_linked_file_text takes a page range and says
          when a PDF has no text layer. One registration serves one library: a project
          library is served by a second registration (see README.md).
-         Created using: claude-opus-5-5-v5.5-date: 211126
+         Created using: $\text {Created using: }\ claude-opus-5-5-\text{v}5.5-\text {date: }211126$
 
 Every database connection opens the .enl file with SQLite's mode=ro URI flag,
 so a write attempt fails at the driver level rather than relying on this code

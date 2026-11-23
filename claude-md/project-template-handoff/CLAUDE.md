@@ -18,7 +18,7 @@ Use global settings for everything else.
 Pointers only. What persists between sessions:
 
 - `records/HANDOFF.md`: Latest handoff, overwritten each session.
-- Claude memory folder: `~/.claude/projects/<launch-folder-key>/memory/`. Local, not in git. Key is the project path with separators replaced by dashes. Save durable facts (decisions, data problems, sources) one per file. Do NOT save task status here—that goes in HANDOFF.md.
+- Claude memory folder: `~/.claude/projects/<launch-folder-key>/memory/`. Local, not in git. Key is the project path with separators replaced by dashes. Save durable facts (decisions, data problems, sources) one per file. Do NOT save task status here; that goes in HANDOFF.md.
 
 ## Working rules for this project
 

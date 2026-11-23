@@ -1,4 +1,4 @@
-"""Run control for task output folders (global Outputs rules in the global CLAUDE.md).
+r"""Run control for task output folders (global Outputs rules in the global CLAUDE.md).
 
 Two modes, chosen from the project root:
 - tracked: the project is a git repository and outputs/ is not git-ignored. A run overwrites
@@ -76,7 +76,7 @@ Outputs: the run's output folder and <folder>/run_info.txt (start); commits, ann
          outputs/INDEX.md rows (accept, reject); a restored folder (discard); reports on stdout
 Exit:    0 on success; 1 with a message on stderr on a guard failure or any refused step
 
-Created using: Claude Opus-v5.5-date: 230926
+Created using: $\text {Created using: }\ Claude Opus-\text{v}5.5-\text {date: }230926$
 Modified using: Claude Opus-v5.5-date: 240926 (run folder mode, command line, task name check)
 Modified using: Claude Opus-v5.5-date: 240926 (keep .md reports when a tracked folder is cleared)
 Modified using: Claude Opus-v5.5-date: 240926 (accept, reject, discard, check, status; file
@@ -92,6 +92,8 @@ Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.4: topic layout thr
                 layout and topics commands)
 Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.5: topics with prefixes in a flat project; layout flat
                 allowed in a project with runs)
+Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.6: git status read with -z, so a path with a space is
+                matched to its task folder)
 """
 
 import argparse
@@ -106,7 +108,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
 import outputs_layout as ol  # noqa: E402
 
-VERSION = "1.5"
+VERSION = "1.6"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {".pdf", ".docx", ".pptx", ".zip", ".7z", ".rar", ".gz", ".pyc"}
 IMAGES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp"}
@@ -146,9 +148,15 @@ def tracked_mode(root):
     return is_repo(root) and not is_ignored(root, "outputs")
 
 
+def status_lines(root, *paths):
+    """Porcelain status lines ('XY path') for paths (all if none). Read with -z, so a path is never quoted."""
+    out = git(root, "status", "--porcelain", "-z", "-uall", "--no-renames", *(("--", *paths) if paths else ())).stdout
+    return [e for e in out.split("\0") if e]
+
+
 def changes(root, rel):
     """Porcelain status lines under rel (a path relative to the root)."""
-    return git(root, "status", "--porcelain", "-uall", "--", rel).stdout.splitlines()
+    return status_lines(root, rel)
 
 
 def next_name(root, task, stamp, repo):
@@ -226,8 +234,7 @@ def start_run(task, root=None, topic=None):
     if is_repo(root):
         rel = out.relative_to(root).as_posix()
         commit = git(root, "rev-parse", "--short", "HEAD", check=False).stdout.strip() or "none"
-        status = [ln for ln in git(root, "status", "--porcelain", "-uall").stdout.splitlines()
-                  if not ln[3:].startswith(rel + "/")]
+        status = [ln for ln in status_lines(root) if not ln[3:].startswith(rel + "/")]
         # Other tasks' pending outputs are separate runs, reviewed on their own: never commit them with this one.
         dirty = [ln for ln in status if not ln[3:].startswith("outputs/")]
         lay = ol.layout_or_flat(root)
@@ -368,8 +375,7 @@ def update_index(root, task, tag, question, status, name=None):
 def other_changes(root, rel):
     """Changed files outside the task folder rel, code/, outputs/INDEX.md and outputs/TOPICS.md."""
     keep = (f"{rel}/", "code/", "outputs/INDEX.md", "outputs/TOPICS.md")
-    return [ln for ln in git(root, "status", "--porcelain", "-uall").stdout.splitlines()
-            if not ln[3:].startswith(keep)]
+    return [ln for ln in status_lines(root) if not ln[3:].startswith(keep)]
 
 
 def latest_run_folder(root, task):

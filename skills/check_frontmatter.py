@@ -1,8 +1,7 @@
-"""Check the frontmatter of SKILL.md files for the plain-value mistakes that make strict YAML parsing fail.
+r"""Check the frontmatter of SKILL.md files for the plain-value mistakes that make strict YAML parsing fail.
 
 Run it on every new or edited skill before deploying. A frontmatter that does not parse is silently ignored by the harness:
 context, agent and background have no effect (the skill does not fork) and the description is not used to list the skill.
-Confirmed on 20 September 2026 for analysis-adversary and literature-search.
 
 Two mistakes are reported.
 1. A value that runs over several lines has an unindented continuation line. Strict YAML needs continuation lines indented, so
@@ -19,12 +18,15 @@ Outputs: one line per file on standard output (OK or FAIL), then up to six probl
          every session), and a warning line follows a file that is over 15,000 characters (long instructions are
          followed less reliably). A warning does not change the exit code.
          Exit code 1 if any file fails or has no frontmatter block, otherwise 0.
+Version: see VERSION; --version prints it.
 
-Created using: Sonnet5-v1.0-date: 200926
+Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }200926$
+Modified using: claude-opus-5-5-v5.5-date: 231126 (VERSION and --version)
 """
 import re
 import sys
 
+VERSION = "1.0"
 DESCRIPTION_LIMIT = 350
 SIZE_LIMIT = 15000
 
@@ -95,6 +97,9 @@ def main(paths):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--version"]:
+        print(f"check_frontmatter.py {VERSION}")
+        sys.exit(0)
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)

@@ -148,6 +148,17 @@ class RunControlTracked(Project):
         self.assertEqual((rows[0][0], rows[0][1], rows[0][2], rows[0][3]),
                          (f"`{tag}`", "`demo`", "Does x hold?", "current"))
 
+    def test_path_with_a_space_is_matched_to_its_task_folder(self):
+        self.start_and_write(task="other", name="a b.txt")
+        self.assertEqual(self.rc("start", "demo").returncode, 0)
+        info = (self.root / "outputs" / "demo" / "run_info.txt").read_text(encoding="utf-8")
+        self.assertIn("working tree clean at start: True", info)
+        self.assertIn("other output folders pending review at start (not part of this run): other", info)
+        (self.root / "outputs" / "demo" / "my file.csv").write_text("x", encoding="utf-8")
+        r = self.rc("check", "demo")
+        self.assertIn("outputs/demo/my file.csv", r.stdout)
+        self.assertNotIn("left uncommitted", r.stdout)
+
     def test_second_run_supersedes_and_reuses_question(self):
         self.start_and_write()
         self.accept(question="Q?")
@@ -386,6 +397,12 @@ class CheckRecords(Project):
         r = self.check()
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("pending", r.stdout.lower())
+
+    def test_pending_path_with_a_space_is_listed_unquoted(self):
+        self.start_and_write(name="my file.csv")
+        r = self.check()
+        self.assertIn("outputs/demo/my file.csv", r.stdout)
+        self.assertNotIn('"outputs/demo/my file.csv"', r.stdout)
 
 
 def decision_rows(first, last, size=60):

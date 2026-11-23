@@ -13,13 +13,14 @@ Method:  record_for_doi looks a DOI up widely, in this order: arXiv (for a 10.48
          norm_doi gives the form used to compare DOIs (no https://doi.org/ or doi: prefix, lower case); it is never
          written to the library.
 PDF text: pymupdf when importable, else pypdf; an OCR text file (from ocr_pdf.py) is added when the text layer is short.
-Version: see VERSION.
+Version: see VERSION; `--version` prints it (the module is otherwise not run by hand).
 """
 import difflib
 import importlib.util
 import json
 import os
 import re
+import sys
 import time
 import unicodedata
 import urllib.error
@@ -315,3 +316,11 @@ def entry_type(record_type, types):
 def read_types(path):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--version"]:
+        print(f"libmeta.py {VERSION}")
+        sys.exit(0)
+    print("libmeta.py is imported by the other library-metadata scripts; it is not run by hand.")
+    sys.exit(2)

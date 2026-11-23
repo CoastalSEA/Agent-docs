@@ -1,4 +1,4 @@
-"""Check the project record files and the memory notes against the project folders.
+r"""Check the project record files and the memory notes against the project folders.
 
 Usage: check_records.py [project_root] [--root <project_root>] [--max N] [--memory DIR]. The root defaults to the current folder.
 Version: see VERSION; --version prints it and the report names it.
@@ -52,7 +52,7 @@ Office lock files (names that start with '~$') are skipped everywhere: they are 
 The checks find missing items, wording and dates only. A wrong status in INDEX.md, or a stale statement that has no
 status word and cites no changed file, is not detected. Update a status when later work changes what a run means.
 
-Created using: Sonnet5-v1.0-date: 200926
+Created using: $\text {Created using: }\ claude-sonnet-5-5-\text{v}5.5-\text {date: }200926$
 (revised by Claude Opus-v5.5-date: 230926: run tags and task folders in check 3; pending-run flag 10)
 (revised by Claude Opus-v5.5-date: 240926: skip Office lock files '~$*')
 (revised by Claude Sonnet-v5.5-date: 141026: paths under archived task folders count as existing; archived rows exempt from
@@ -63,6 +63,8 @@ Created using: Sonnet5-v1.0-date: 200926
 (revised by claude-opus-5-5-v5.5-date: 231126: version 1.3, topic layout and check 14)
 (revised by claude-opus-5-5-v5.5-date: 231126: version 1.4, check 14 reads the prefix column; in a flat project
  with prefixes a task folder with no listed prefix that TOPICS.md does not name is a flag)
+(revised by claude-opus-5-5-v5.5-date: 231126: version 1.5, git status read with -z, so a path with a space is matched
+ to its task folder)
 """
 import argparse
 import datetime as dt
@@ -76,7 +78,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # outputs_layout.py is installed beside this script
 import outputs_layout as ol  # noqa: E402
 
-VERSION = "1.4"
+VERSION = "1.5"
 ROW_WARN, ROW_HARD, ROW_TARGET = 800, 1000, 500  # characters in a DECISIONS.md row
 HARD_FROM = (26, 11, 9)  # (year, month, day): rows dated on or after 091126 must keep to ROW_HARD
 MAX_CHARS = 60000  # characters in DECISIONS.md
@@ -93,6 +95,15 @@ STATUS_WORDS = re.compile(r"\b(awaiting|pending|not yet|not run|NOT pasted|TODO|
 def is_lock(name):
     # Office writes a hidden lock file '~$<name>' beside an open document.
     return name.startswith("~$")
+
+
+# git status of outputs/, read with -z so that a path with a space is not quoted
+GIT_STATUS_OUTPUTS = ["git", "status", "--porcelain", "-z", "-uall", "--no-renames", "--", "outputs"]
+
+
+def status_entries(out):
+    """The 'XY path' entries of `git status --porcelain -z` output."""
+    return [e for e in out.split("\0") if e]
 
 
 def record_files(root):
@@ -286,10 +297,9 @@ def main():
         a = sorted(r for r in runs if r not in tags and r not in disk and r not in found_names and r not in ARCHIVED_RUNS)
         b = sorted(tags - runs)
         try:
-            res = subprocess.run(["git", "status", "--porcelain", "-uall", "--", "outputs"], cwd=root,
-                                 capture_output=True, text=True)
+            res = subprocess.run(GIT_STATUS_OUTPUTS, cwd=root, capture_output=True, text=True)
             lay = ol.layout_or_flat(root)
-            dirty = {lab for lab in (ol.task_label(root, ln[3:], lay) for ln in res.stdout.splitlines()
+            dirty = {lab for lab in (ol.task_label(root, ln[3:], lay) for ln in status_entries(res.stdout)
                                      if not is_lock(ln[3:].rsplit("/", 1)[-1])) if lab} if res.returncode == 0 else set()
         except OSError:
             dirty = set()
@@ -413,8 +423,8 @@ def main():
 
     # 10. pending runs
     try:
-        res = subprocess.run(["git", "status", "--porcelain", "-uall", "--", "outputs"], cwd=root, capture_output=True, text=True)
-        pending = [ln for ln in res.stdout.splitlines() if not is_lock(ln[3:].rsplit("/", 1)[-1])] if res.returncode == 0 else []
+        res = subprocess.run(GIT_STATUS_OUTPUTS, cwd=root, capture_output=True, text=True)
+        pending = [ln for ln in status_entries(res.stdout) if not is_lock(ln[3:].rsplit("/", 1)[-1])] if res.returncode == 0 else []
     except OSError:
         pending = []
     print(f"10. Flag: {len(pending)} uncommitted paths under outputs/ (runs pending review)")

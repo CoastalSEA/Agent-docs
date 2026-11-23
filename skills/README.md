@@ -5,7 +5,7 @@ deployed at project scope (`.claude/skills/`) or user scope (`~/.claude/skills/`
 given project. See `skill_location.md` for the mechanics of project-level vs. user-level
 vs. plugin-based deployment.
 
-`blank-skill-template.md` is the starting point for a new skill — copy it, fill in
+`blank-skill-template.md` is the starting point for a new skill. Copy it, fill in
 the brackets, then restructure into `<name>/SKILL.md` once the design has settled.
 The template is a single file with no folder of its own, so `deploy.py` does not install it.
 See `../prompts/new-skill-workflow.md` for the draft-refine-deploy process to run it through.
@@ -14,7 +14,7 @@ See `../prompts/new-skill-workflow.md` for the draft-refine-deploy process to ru
 
 `deploy.py apply` installs all seven skills, except those named in `~/.claude/rules/skip-skills.txt` (one
 name per line, `#` for a comment). Every skill uses the Python and the run control command
-named in `machine.md`, except `proofread`, which uses the Python only. The table lists what else a skill needs. List a skill
+named in `machine.md`, except `proofread` and `library-metadata`, which use the Python only. The table lists what else a skill needs. List a skill
 that you cannot use in that file before `apply`. A copy that is already installed is left alone: remove its
 folder from `~/.claude/skills/` by hand.
 

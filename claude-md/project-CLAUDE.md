@@ -24,11 +24,11 @@ Pointers only. What persists between sessions:
 
 - `data/DATA-NOTES.md`: One entry per data file (source, row order, units, links, problems). Links to per-file READMEs in `data/`; does not copy them.
 - `records/DECISIONS.md`: One line per decision: `DDMMYY | decision | reason | evidence file`.
-- `outputs/INDEX.md`: One line per accepted run: run tag (or legacy run folder), task folder, question answered, status (current, superseded or not adopted) and replacement.
+- `outputs/INDEX.md`: One line per accepted or rejected run: run tag (or legacy run folder), task folder, question answered, status (current, superseded or not adopted) and replacement.
 - `products/PRODUCTS.md`: register of large generated files in the git-ignored `products/` folder, with the rule for what goes there (script-made files over the file guard limit, any video or animation, intermediates a later script reads; not downloaded files, which go in `sources/`). Each file has script, run tag, size and hash. Git does not hold them: keep a copy elsewhere.
 - Archived runs: the archive control command `archive <task>` (in `machine.md`) removes a task folder from the working tree and keeps it under the tag `archive-<task>-<DDMMYY>` (INDEX status archived); `restore <task>` brings it back. Run tags and INDEX rows stay valid.
 - `records/HANDOFF.md`: Latest handoff, overwritten each session.
-- Claude memory folder: `~/.claude/projects/<launch-folder-key>/memory/`. Local, not in git. Key is project path with dashes for separators. Save durable facts and pointers only. Do NOT save task status here—that goes in HANDOFF.md.
+- Claude memory folder: `~/.claude/projects/<launch-folder-key>/memory/`. Local, not in git. Key is project path with dashes for separators. Save durable facts and pointers only. Do NOT save task status here; that goes in HANDOFF.md.
 
 ## Working rules for this project
 
@@ -43,16 +43,11 @@ Pointers only. What persists between sessions:
   - Flag: file in `data/` modified after `DATA-NOTES.md` (entry may be stale).
   - Flag: evidence file in `DECISIONS.md` modified after its line date (possibly stale; check before relying).
   - Every memory note is listed in `MEMORY.md`; every link resolves.
-  - Flag: memory note containing status word (awaiting, pending, not yet, draft), missing path, or file modified after note date (review and correct or delete).
+  - Flag: memory note containing a status word (the list is in `check_records.py`; for example awaiting, pending, not yet, draft), missing path, or file modified after note date (review and correct or delete).
   - Flag: file listed in `products/PRODUCTS.md` that is missing from `products/`.
-  - Flag: `DECISIONS.md` row over 800 characters, or more than 100 rows or 60,000 characters. Fail: a row over 1,000 characters dated 091126 or later. Move the oldest rows with `rotate_records.py`.
+  - Flag: `DECISIONS.md` row over 800 characters, or more than 100 rows or 60,000 characters. Fail: a row over 1,000 characters. Move the oldest rows with `rotate_records.py`.
   
-  Report counts and flags in wrap-up. Note: check cannot detect wrong status in `INDEX.md`—update manually when work changes what a run means.
+  Report counts and flags in wrap-up. Note: check cannot detect wrong status in `INDEX.md`; update manually when work changes what a run means.
 - **Subagents.** Include the search-first rule and pointers above in every subagent prompt.
 - **Clean-start runs.** A run told to ignore earlier results may still read `DATA-NOTES.md` (data facts are not results). It reads `DECISIONS.md`, `INDEX.md`, and earlier outputs only if the task says so.
 - **Outputs layout.** If `project.py status` or the run control `start` reports the outputs layout undecided, ask the user to choose topics or flat before the first run, and run `run_control.py layout <choice>` with the answer. In a topic project, when the plan is agreed, draft the topic rows from its phases or work packages with their plan references, and add them with `topics add` once the user agrees the table. In a flat project, agreed topics are recorded the same way with `--prefix`, and new task names start with their prefix. Add, close, reopen or rename a topic only on the user's instruction. Topics follow one axis (work phase or package, kind of work, or object of study), 4 to 8 of broadly similar size. A run that serves several phases goes in the phase that asked the question; its question records the link. A follow-up to the same question edits the note in place in the same task folder; a new folder is for a new question. Read another run's outputs through `run_control.py where <task>`, never through a literal `outputs/<task>` path.
-
-## Project progress
-
-Current state and next step only. Decisions go in `DECISIONS.md`, not here.
-

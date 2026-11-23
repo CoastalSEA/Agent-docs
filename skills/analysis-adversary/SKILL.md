@@ -264,7 +264,8 @@ text and writing it.** It has ordinary `Write` access and is not under the
 read-only constraint; only the review is. It runs the `BEFORE SAVING, RUN:`
 command and writes the report, and each returned script under `code/`, into the
 folder that prints. In a git project with
-tracked outputs this is `outputs/analysis-adversary-<subject>/`, with its files
+tracked outputs this is `outputs/analysis-adversary-<subject>/` (in its topic
+folder in a topic project), with its files
 other than `.md` removed (overwrite the old report); otherwise it is a new
 `outputs/analysis-adversary-<subject>-<DDMMYY>-run<N>/`. If that folder differs
 from the `FILE:` line, use the printed folder and say so. In tracked mode, report

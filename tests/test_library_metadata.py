@@ -338,7 +338,10 @@ class Lookup(Base):
 
 class Helper(Base):
     def test_unchanged_fields_are_not_written_stamped_or_logged(self):
-        stamp = lambda: self.el.connect(self.lib).execute("select value from misc where code=22 and subcode=0").fetchone()[0]
+        def stamp():
+            with contextlib.closing(self.el.connect(self.lib)) as c:
+                return c.execute("select value from misc where code=22 and subcode=0").fetchone()[0]
+
         before = stamp()
         rows = self.el.update_refs(self.lib, self.root, {1: {"title": "Heat transport in a model ocean", "year": "2001"}},
                                    log_dir=self.root / "logs")

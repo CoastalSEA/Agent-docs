@@ -1,4 +1,4 @@
-"""Archive and restore task output folders (project addition to run control).
+r"""Archive and restore task output folders (project addition to run control).
 
 An archived folder is removed from the working tree. Nothing is lost: the folder is held by the git history
 and by an annotated tag `archive-<task>-<DDMMYY>` that points at the commit that still holds it. The run tags
@@ -24,7 +24,7 @@ Used with: outputs/INDEX.md, check_records.py (a path under an archived folder c
 The master is scripts/archive_control.py in the Agent-docs repository; deploy.py installs it as ~/.claude/scripts/archive_control.py.
 Version: see VERSION; it is written to the archive tag message.
 
-Created using: Claude Sonnet-v5.5-date: 131026
+Created using: $\text {Created using: }\ Claude Sonnet-\text{v}5.5-\text {date: }131026$
 Modified using: claude-sonnet-5-5-v5.5-date: 081126 (moved to scripts/; --root anywhere; version)
 Modified using: claude-opus-5-5-v5.5-date: 231126 (version 1.1: topic layout through outputs_layout.py)
 """

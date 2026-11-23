@@ -213,6 +213,15 @@ class Scripts(unittest.TestCase):
             r = subprocess.run([sys.executable, "-I", str(p), "--version"], capture_output=True, text=True)
             self.assertEqual(r.stdout.strip(), f"{p.name} {version.group(1)}")
 
+    def test_deploy_and_skill_scripts_have_a_version_and_the_flag(self):
+        paths = [REPO / "deploy.py", REPO / "skills" / "check_frontmatter.py",
+                 *sorted((REPO / "skills").glob("*/scripts/*.py"))]
+        for p in paths:
+            version = re.search(r'^VERSION = "([^"]+)"', read(p), re.M)
+            self.assertIsNotNone(version, f"{p.name} has no VERSION")
+            r = subprocess.run([sys.executable, "-I", str(p), "--version"], capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), f"{p.name} {version.group(1)}", rel(p))
+
 
 class Deploy(unittest.TestCase):
     def setUp(self):
